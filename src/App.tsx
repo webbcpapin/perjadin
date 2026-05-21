@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { parseDetailPertanggungjawaban, detectGeotagPoints } from './utils/parser';
 import { getUangHarian, parseTanggalRange } from './data/sbmData';
 
@@ -47,15 +47,95 @@ function formatPoint(p?: { hariTanggal: string; waktuTagging: string; wilayahTag
   return `${p.hariTanggal} ${p.waktuTagging} ${p.wilayahTagging}`;
 }
 
+function readCell(source: Record<string, unknown>, names: string[]) {
+  for (const name of names) {
+    const value = source[name];
+    if (value !== undefined && value !== null && value !== '') return String(value);
+  }
+  return '';
+}
+
+function readNumber(source: Record<string, unknown>, names: string[]) {
+  const raw = readCell(source, names).replace(/[^\d.-]/g, '');
+  return Number(raw) || 0;
+}
+
+function rowFromSheet(item: Record<string, unknown>): Row {
+  return {
+    idKegiatan: readCell(item, ['ID Kegiatan']),
+    namaKegiatan: readCell(item, ['Nama Kegiatan']),
+    nomorST: readCell(item, ['Nomor ST']),
+    nka: readCell(item, ['NKA/Nomor Kegiatan', 'NKA / Nomor Kegiatan', 'NKA']),
+    tanggalKegiatan: readCell(item, ['Tanggal Kegiatan', 'Tanggal']),
+    tujuan: readCell(item, ['Tujuan']),
+    namaPegawai: readCell(item, ['Nama Pegawai', 'Pegawai']),
+    lamaHari: readNumber(item, ['Lama (Hari)', 'Lama']),
+    uangHarianPerHari: readNumber(item, ['Uang Harian per Hari']),
+    totalUangHarian: readNumber(item, ['Total Uang Harian']),
+    uangMuka: readNumber(item, ['Uang Muka']),
+    totalPengeluaranRiil: readNumber(item, ['Total Pengeluaran Riil']),
+    kurangLebihBayar: readNumber(item, ['Kurang/Lebih Bayar', 'Kurang / Lebih Bayar']),
+    statusPJ: (readCell(item, ['Status Pertanggungjawaban', 'Status PJ']) || 'Belum Lengkap') as Row['statusPJ'],
+    statusGeotag: readCell(item, ['Status Geotag', 'Geotag']),
+    start: readCell(item, ['START']),
+    clockIn: readCell(item, ['CLOCK IN']),
+    clockOut: readCell(item, ['CLOCK OUT']),
+    end: readCell(item, ['END']),
+    volume: readNumber(item, ['VOLUME']),
+    nilaiRiil: readNumber(item, ['NILAI RIIL', 'Nilai Riil']),
+    kodeAkun: readCell(item, ['Kode Akun', 'Akun']),
+    tanggalInput: readCell(item, ['Tanggal Input']),
+    detailGeotag: readCell(item, ['Detail Geotag']),
+  };
+}
+
+function accountFromSheet(item: Record<string, unknown>): Account | null {
+  const kode = readCell(item, ['Kode Akun']);
+  if (!kode) return null;
+  return {
+    kode,
+    nama: readCell(item, ['Nama Akun']) || kode,
+    pagu: readNumber(item, ['Pagu']),
+    realisasi: readNumber(item, ['Realisasi']),
+    blokir: readNumber(item, ['Komitmen']),
+  };
+}
+
 function App() {
   const [raw, setRaw] = useState('');
   const [tujuan, setTujuan] = useState('');
   const [kodeAkun, setKodeAkun] = useState(initialAccounts[0].kode);
   const [statusPJ, setStatusPJ] = useState<Row['statusPJ']>('Belum Lengkap');
-  const [endpoint, setEndpoint] = useState('');
+  const [endpoint, setEndpoint] = useState(() => localStorage.getItem('eperjadin_webapp_url') || '');
   const [accounts, setAccounts] = useState<Account[]>(initialAccounts);
   const [rows, setRows] = useState<Row[]>([]);
   const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    if (endpoint.trim()) loadRemoteDatabase(endpoint.trim(), false);
+  }, []);
+
+  async function loadRemoteDatabase(url = endpoint.trim(), showMessage = true) {
+    if (!url) {
+      setMessage('Isi URL Apps Script Web App dulu untuk memuat database Google Sheets.');
+      return;
+    }
+
+    try {
+      localStorage.setItem('eperjadin_webapp_url', url);
+      const res = await fetch(url, { method: 'GET' });
+      const payload = await res.json();
+      if (!payload.success) throw new Error(payload.message || 'Response Google Sheets tidak valid.');
+
+      const nextRows = Array.isArray(payload.data) ? payload.data.map(rowFromSheet).reverse() : [];
+      const nextAccounts = Array.isArray(payload.akun) ? payload.akun.map(accountFromSheet).filter(Boolean) as Account[] : [];
+      setRows(nextRows);
+      if (nextAccounts.length) setAccounts(nextAccounts);
+      if (showMessage) setMessage(`Database Google Sheets dimuat: ${nextRows.length} baris.`);
+    } catch (error) {
+      setMessage('Gagal memuat database Google Sheets. Cek URL Web App, izin akses deploy, dan isi SPREADSHEET_ID di Apps Script.');
+    }
+  }
 
   const summary = useMemo(() => {
     const pagu = accounts.reduce((a, b) => a + b.pagu, 0);
@@ -126,10 +206,12 @@ function App() {
     setAccounts(prev => prev.map(a => a.kode === row.kodeAkun ? { ...a, realisasi: a.realisasi + (row.statusPJ === 'Disetujui' ? row.nilaiRiil : 0) } : a));
 
     if (endpoint.trim()) {
+      localStorage.setItem('eperjadin_webapp_url', endpoint.trim());
       try {
         const res = await fetch(endpoint.trim(), { method: 'POST', body: JSON.stringify({ action: 'upsertPerjadin', row }), headers: { 'Content-Type': 'text/plain' } });
         const text = await res.text();
         setMessage(`Tersimpan lokal dan terkirim ke Google Sheets: ${text}`);
+        await loadRemoteDatabase(endpoint.trim(), false);
       } catch (e) {
         setMessage('Tersimpan lokal, tetapi gagal kirim ke Google Sheets. Cek URL Web App dan akses deploy.');
       }
@@ -168,7 +250,10 @@ function App() {
                 {accounts.map(a => <option key={a.kode} value={a.kode}>{a.nama}</option>)}
               </select>
             </div>
-            <input className="w-full border rounded-lg px-3 py-2 text-xs" value={endpoint} onChange={e => setEndpoint(e.target.value)} placeholder="URL Apps Script Web App. Opsional" />
+            <div className="grid md:grid-cols-[1fr_auto] gap-3">
+              <input className="w-full border rounded-lg px-3 py-2 text-xs" value={endpoint} onChange={e => setEndpoint(e.target.value)} placeholder="URL Apps Script Web App untuk database Google Sheets" />
+              <button type="button" onClick={() => loadRemoteDatabase()} className="border border-blue-700 text-blue-700 px-4 py-2 rounded-xl font-medium">Muat Database</button>
+            </div>
             <button onClick={save} className="bg-blue-700 text-white px-5 py-2 rounded-xl font-medium">Parse, Hitung, dan Simpan</button>
             {message && <p className="text-sm bg-blue-50 border border-blue-200 rounded-lg p-3">{message}</p>}
           </div>
