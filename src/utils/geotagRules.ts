@@ -95,19 +95,25 @@ function normalizeLocation(raw: string) {
     .trim();
 }
 
-function locationText(geotag: GeotagEntry) {
-  return `${geotag.wilayahTagging} ${geotag.lokasiTagging}`;
-}
-
 function isPangkalpinang(geotag: GeotagEntry) {
-  return normalizeLocation(locationText(geotag)).includes('pangkalpinang');
+  return normalizeLocation(geotag.wilayahTagging || geotag.lokasiTagging).includes('pangkalpinang');
 }
 
 function isDestination(geotag: GeotagEntry, tujuan: string) {
   const normalizedDestination = normalizeLocation(tujuan);
-  const normalizedGeotag = normalizeLocation(locationText(geotag));
+  const normalizedRegion = normalizeLocation(geotag.wilayahTagging);
+  const normalizedAddress = normalizeLocation(geotag.lokasiTagging);
   if (!normalizedDestination) return false;
-  return normalizedGeotag.includes(normalizedDestination) || normalizedDestination.includes(normalizedGeotag);
+
+  // Tujuan luar kota tidak boleh tertukar dengan alamat Pangkalpinang yang
+  // sering memuat nama provinsi "Bangka Belitung" di lokasi tagging lengkap.
+  if (!normalizedDestination.includes('pangkalpinang') && normalizedRegion.includes('pangkalpinang')) return false;
+
+  if (normalizedRegion) {
+    return normalizedRegion === normalizedDestination || normalizedRegion.includes(normalizedDestination);
+  }
+
+  return normalizedAddress.includes(normalizedDestination);
 }
 
 function timeToMinutes(raw: string) {
