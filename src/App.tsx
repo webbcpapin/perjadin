@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ClipboardCheck, Database, RefreshCw, Save } from 'lucide-react';
+import { ClipboardCheck, Database, FileText, RefreshCw, Save } from 'lucide-react';
 import './App.css';
 import { accountKindLabel, budgetAccounts, findBudgetAccount, type BudgetAccount } from './data/perjadinAccounts';
 import { getUangHarian, parseTanggalRange } from './data/sbmData';
-import { detectGeotagPoints, parsePerjadinClipboard } from './utils/parser';
+import { parsePerjadinClipboard } from './utils/parser';
+import { createGeotagStatementDocx, downloadBlob } from './utils/docxGenerator';
+import { geotagPointLabel, selectRequiredGeotagPoints } from './utils/geotagRules';
+import type { GeotagIssue } from './types';
 
 type Stage = 'Persetujuan' | 'Pertanggungjawaban' | 'Pelaksanaan';
 type StatusPJ = 'Belum Lengkap' | 'Lengkap' | 'Disetujui';
@@ -40,6 +43,7 @@ type Row = {
   kodeAkun: string;
   tanggalInput: string;
   detailGeotag: string;
+  geotagIssues: GeotagIssue[];
 };
 
 type AccountUsage = { pagu: number; realisasi: number; komitmen: number; saldo: number };
@@ -108,6 +112,7 @@ function rowFromSheet(item: Record<string, unknown>): Row {
     kodeAkun: readCell(item, ['Kode Akun', 'Akun']),
     tanggalInput: readCell(item, ['Tanggal Input']),
     detailGeotag: readCell(item, ['Detail Geotag']),
+    geotagIssues: [],
   };
 }
 
@@ -309,14 +314,20 @@ function App() {
       '';
     const range = parseTanggalRange(parsed.tanggalKegiatan);
     const uang = getUangHarian(detectedTujuan);
-    const points = detectGeotagPoints(parsed.geotags);
+    const geotagRule = selectRequiredGeotagPoints(parsed.geotags, parsed.tanggalKegiatan, detectedTujuan);
+    const points = geotagRule.points;
     const detailGeotag = parsed.geotags.map((g) => `${g.hariTanggal} ${g.waktuTagging} ${g.wilayahTagging}`).join(' | ');
     const totalUangHarian = uang.uangHarian * range.lamaHari;
     const nilaiRiil =
       tahap === 'Persetujuan'
         ? parsed.totalEstimasiBiaya || parsed.totalPengeluaranRiil || totalUangHarian
         : parsed.totalPengeluaranRiil || totalUangHarian;
-    const statusGeotag = parsed.geotags.length >= 4 ? 'Lengkap' : parsed.geotags.length > 0 ? 'Sebagian' : 'Belum Ada';
+    const statusGeotag =
+      tahap === 'Pertanggungjawaban'
+        ? geotagRule.status
+        : parsed.geotags.length > 0
+          ? geotagRule.status
+          : 'Belum Ada';
 
     return {
       tahap,
@@ -350,7 +361,39 @@ function App() {
       kodeAkun: resolvedKodeAkun,
       tanggalInput: today(),
       detailGeotag,
+      geotagIssues: geotagRule.issues,
     };
+  }
+
+  function generateGeotagStatement() {
+    const row = buildRow();
+    if (!row) {
+      setMessage('Data tidak terbaca. Paste detail pertanggungjawaban dulu sebelum membuat surat geotag.');
+      return;
+    }
+
+    if (row.geotagIssues.length === 0) {
+      setMessage('Geotag sudah lengkap sesuai kaidah. Surat pernyataan tidak wajib dibuat.');
+      return;
+    }
+
+    const blob = createGeotagStatementDocx({
+      namaPegawai: row.namaPegawai,
+      nomorST: row.nomorST,
+      nomorSPD: '',
+      tanggalKegiatan: row.tanggalKegiatan,
+      namaKegiatan: row.namaKegiatan,
+      tujuan: row.tujuan,
+      start: row.start || geotagPointLabel(),
+      clockIn: row.clockIn || geotagPointLabel(),
+      clockOut: row.clockOut || geotagPointLabel(),
+      end: row.end || geotagPointLabel(),
+      issues: row.geotagIssues,
+    });
+
+    const safeName = (row.namaPegawai || row.idKegiatan || 'perjadin').replace(/[^a-z0-9-]+/gi, '-');
+    downloadBlob(blob, `Surat-Pernyataan-Geotag-${safeName}.docx`);
+    setMessage('Surat pernyataan geotag berhasil dibuat dari hasil parsing.');
   }
 
   async function save() {
@@ -485,6 +528,14 @@ function App() {
                 Simpan
               </button>
             </div>
+            <button
+              type="button"
+              onClick={generateGeotagStatement}
+              className="mt-3 inline-flex items-center justify-center gap-2 rounded-md border border-amber-700 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800"
+            >
+              <FileText className="h-4 w-4" />
+              Buat Surat Pernyataan Geotag
+            </button>
             {message && <p className="mt-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">{message}</p>}
           </section>
 
