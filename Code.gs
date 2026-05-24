@@ -36,20 +36,22 @@ const HEADERS_DATA = [
 ];
 
 const HEADERS_AKUN = ['Kode Akun', 'Nama Akun', 'Pagu', 'Realisasi', 'Komitmen', 'Saldo'];
+const DATA_SHEET_NAME = 'DATA_PERJADIN';
+const ACCOUNT_SHEET_NAME = 'AKUN_ANGGARAN';
 
 const DEFAULT_ACCOUNTS = [
-  ['636722.015.524111.01505CC.4787AEF.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4787.AEF', 3300000, 0, 0, 3300000],
-  ['636722.015.524113.01505CC.4787AEF.A000000001.00000.2.3051.2.000000.000000', '524113 Dalam Kota - 4787.AEF', 480000, 0, 0, 480000],
-  ['636722.015.524111.01505CC.4787BAE.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4787.BAE', 5400000, 0, 0, 5400000],
-  ['636722.015.524113.01505CC.4787BAE.A000000001.00000.2.3051.2.000000.000000', '524113 Dalam Kota - 4787.BAE', 960000, 0, 0, 960000],
-  ['636722.015.524111.01505CC.4787BIG.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4787.BIG', 36000000, 0, 0, 36000000],
-  ['636722.015.524113.01505CC.4787BIG.A000000001.00000.2.3051.2.000000.000000', '524113 Dalam Kota - 4787.BIG', 16800000, 0, 0, 16800000],
-  ['636722.015.524111.01505CC.4789BIG.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4789.BIG', 31800000, 0, 0, 31800000],
-  ['636722.015.524113.01505CC.4789BIG.A000000001.00000.2.3051.2.000000.000000', '524113 Dalam Kota - 4789.BIG', 4800000, 0, 0, 4800000],
-  ['636722.015.524111.01505WA.4695EBA.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4695.EBA', 39419000, 0, 0, 39419000],
-  ['636722.015.524113.01505WA.4695EBA.A000000001.00000.2.3051.2.000000.000000', '524113 Dalam Kota - 4695.EBA', 3240000, 0, 0, 3240000],
-  ['636722.015.524111.01505WA.4698EBD.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4698.EBD', 1800000, 0, 0, 1800000],
-  ['636722.015.524113.01505WA.4698EBD.A000000001.00000.2.3051.2.000000.000000', '524113 Dalam Kota - 4698.EBD', 720000, 0, 0, 720000]
+  ['636722.015.524111.01505CC.4787AEF.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4787.AEF - Sosialisasi dan Penyuluhan (Eksternal)', 3300000, 0, 0, 3300000],
+  ['636722.015.524113.01505CC.4787AEF.A000000001.00000.2.3051.2.000000.000000', '524113 Dalam Kota - 4787.AEF - Sosialisasi dan Penyuluhan (Eksternal)', 480000, 0, 0, 480000],
+  ['636722.015.524111.01505CC.4787BAE.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4787.BAE - Klinik Ekspor', 5400000, 0, 0, 5400000],
+  ['636722.015.524113.01505CC.4787BAE.A000000001.00000.2.3051.2.000000.000000', '524113 Dalam Kota - 4787.BAE - Klinik Ekspor', 960000, 0, 0, 960000],
+  ['636722.015.524111.01505CC.4787BIG.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4787.BIG - Pemeriksaan Kepabeanan dan Cukai', 36000000, 0, 0, 36000000],
+  ['636722.015.524113.01505CC.4787BIG.A000000001.00000.2.3051.2.000000.000000', '524113 Dalam Kota - 4787.BIG - Pemeriksaan Kepabeanan dan Cukai', 16800000, 0, 0, 16800000],
+  ['636722.015.524111.01505CC.4789BIG.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4789.BIG - Laporan Hasil Intelijen, Penindakan, dan Penyidikan', 31800000, 0, 0, 31800000],
+  ['636722.015.524113.01505CC.4789BIG.A000000001.00000.2.3051.2.000000.000000', '524113 Dalam Kota - 4789.BIG - Laporan Hasil Intelijen, Penindakan, dan Penyidikan', 4800000, 0, 0, 4800000],
+  ['636722.015.524111.01505WA.4695EBA.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4695.EBA - Kerumahtanggaan', 39419000, 0, 0, 39419000],
+  ['636722.015.524113.01505WA.4695EBA.A000000001.00000.2.3051.2.000000.000000', '524113 Dalam Kota - 4695.EBA - Kerumahtanggaan', 3240000, 0, 0, 3240000],
+  ['636722.015.524111.01505WA.4698EBD.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4698.EBD - Rekomendasi Kepatuhan Internal', 1800000, 0, 0, 1800000],
+  ['636722.015.524113.01505WA.4698EBD.A000000001.00000.2.3051.2.000000.000000', '524113 Dalam Kota - 4698.EBD - Rekomendasi Kepatuhan Internal', 720000, 0, 0, 720000]
 ];
 
 function ss_() {
@@ -84,9 +86,15 @@ function sheet_(name, headers) {
 function doGet() {
   ensureAccounts_();
   refreshAkun_();
-  const data = readSheet_('DATA_PERJADIN', HEADERS_DATA);
-  const akun = readSheet_('AKUN_ANGGARAN', HEADERS_AKUN);
-  return out_({ success: true, data: data, akun: akun });
+  const dataSheet = dataSheetForRead_();
+  const data = dataSheet ? readExistingSheet_(dataSheet) : [];
+  const akun = readSheet_(ACCOUNT_SHEET_NAME, HEADERS_AKUN);
+  return out_({
+    success: true,
+    data: data,
+    akun: akun,
+    sourceSheet: dataSheet ? dataSheet.getName() : DATA_SHEET_NAME
+  });
 }
 
 function doPost(e) {
@@ -101,7 +109,7 @@ function doPost(e) {
 }
 
 function upsertPerjadin_(r) {
-  const sh = sheet_('DATA_PERJADIN', HEADERS_DATA);
+  const sh = sheet_(DATA_SHEET_NAME, HEADERS_DATA);
   const headers = headerMap_(sh);
   const key = [r.tahap || 'Pertanggungjawaban', r.idKegiatan, r.nomorST, r.namaPegawai || r.nomorKegiatan || r.nka].join('|');
   const values = sh.getDataRange().getValues();
@@ -134,7 +142,7 @@ function upsertPerjadin_(r) {
 }
 
 function saveAccounts_(accounts) {
-  const sh = sheet_('AKUN_ANGGARAN', HEADERS_AKUN);
+  const sh = sheet_(ACCOUNT_SHEET_NAME, HEADERS_AKUN);
   if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, HEADERS_AKUN.length).clearContent();
 
   const rows = accounts.map(function(account) {
@@ -200,14 +208,25 @@ function rowObject_(r) {
 }
 
 function ensureAccounts_() {
-  const sh = sheet_('AKUN_ANGGARAN', HEADERS_AKUN);
-  if (sh.getLastRow() > 1) return;
-  sh.getRange(2, 1, DEFAULT_ACCOUNTS.length, HEADERS_AKUN.length).setValues(DEFAULT_ACCOUNTS);
+  const sh = sheet_(ACCOUNT_SHEET_NAME, HEADERS_AKUN);
+  if (sh.getLastRow() <= 1) {
+    sh.getRange(2, 1, DEFAULT_ACCOUNTS.length, HEADERS_AKUN.length).setValues(DEFAULT_ACCOUNTS);
+    return;
+  }
+
+  const values = sh.getDataRange().getValues();
+  for (let i = 1; i < values.length; i++) {
+    const kode = values[i][0];
+    const master = DEFAULT_ACCOUNTS.find(function(account) { return account[0] === kode; });
+    if (!master) continue;
+
+    sh.getRange(i + 1, 2, 1, 2).setValues([[master[1], master[2]]]);
+  }
 }
 
 function refreshAkun_() {
-  const akunSheet = sheet_('AKUN_ANGGARAN', HEADERS_AKUN);
-  const dataSheet = sheet_('DATA_PERJADIN', HEADERS_DATA);
+  const akunSheet = sheet_(ACCOUNT_SHEET_NAME, HEADERS_AKUN);
+  const dataSheet = dataSheetForRead_() || sheet_(DATA_SHEET_NAME, HEADERS_DATA);
   const akunRows = akunSheet.getDataRange().getValues();
   const dataRows = dataSheet.getDataRange().getValues();
   if (akunRows.length <= 1) return;
@@ -254,15 +273,55 @@ function refreshAkun_() {
 function readSheet_(name, headers) {
   const sh = sheet_(name, headers);
   if (!sh || sh.getLastRow() === 0) return [];
+  return readExistingSheet_(sh);
+}
+
+function readExistingSheet_(sh) {
+  if (!sh || sh.getLastRow() === 0) return [];
   const values = sh.getDataRange().getValues();
   const rowHeaders = values.shift();
-  return values.map(function(row) {
+  return values.filter(function(row) {
+    return row.some(function(cell) { return cell !== '' && cell !== null; });
+  }).map(function(row) {
     const obj = {};
     rowHeaders.forEach(function(header, index) {
       obj[header] = row[index];
     });
     return obj;
   });
+}
+
+function dataSheetForRead_() {
+  const ss = ss_();
+  const primary = ss.getSheetByName(DATA_SHEET_NAME);
+  if (sheetHasRows_(primary)) return primary;
+
+  const preferredNames = [
+    'Data Master',
+    'DATA MASTER',
+    'Data Perjadin',
+    'DATA PERJADIN',
+    'MASTER',
+    'Sheet1'
+  ];
+
+  for (let i = 0; i < preferredNames.length; i++) {
+    const candidate = ss.getSheetByName(preferredNames[i]);
+    if (sheetHasRows_(candidate) && candidate.getName() !== ACCOUNT_SHEET_NAME) return candidate;
+  }
+
+  const sheets = ss.getSheets();
+  for (let i = 0; i < sheets.length; i++) {
+    const sh = sheets[i];
+    if (sh.getName() === ACCOUNT_SHEET_NAME) continue;
+    if (sheetHasRows_(sh)) return sh;
+  }
+
+  return primary || sheet_(DATA_SHEET_NAME, HEADERS_DATA);
+}
+
+function sheetHasRows_(sh) {
+  return !!sh && sh.getLastRow() > 1 && sh.getLastColumn() > 0;
 }
 
 function headerMap_(sh) {

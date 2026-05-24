@@ -27,7 +27,7 @@ function account(
 
   return {
     kode: `636722.015.${akunBelanja}.${bidang}.${ro}${suffix}`,
-    nama: `${akunBelanja} ${jenis === 'luar_kota' ? 'Luar Kota' : 'Dalam Kota'} - ${roLabel}`,
+    nama: `${akunBelanja} ${jenis === 'luar_kota' ? 'Luar Kota' : 'Dalam Kota'} - ${roLabel} - ${uraian}`,
     pagu,
     realisasi: 0,
     komitmen: 0,

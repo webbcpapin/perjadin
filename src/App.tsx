@@ -149,6 +149,15 @@ function stageFromSource(sourceType?: string): Stage {
   return 'Pertanggungjawaban';
 }
 
+function formatAccountOption(account: BudgetAccount) {
+  return `${account.akunBelanja} | ${accountKindLabel(account.jenis)} | ${account.roLabel} | ${account.uraian} | Pagu ${rupiah(account.pagu)}`;
+}
+
+function formatAccountName(account?: BudgetAccount) {
+  if (!account) return '';
+  return `${account.akunBelanja} ${accountKindLabel(account.jenis)} - ${account.roLabel} - ${account.uraian}`;
+}
+
 function calculateUsage(accounts: BudgetAccount[], rows: Row[]) {
   const usage: Record<string, AccountUsage> = Object.fromEntries(
     accounts.map((account) => [account.kode, { pagu: account.pagu, realisasi: 0, komitmen: 0, saldo: account.pagu }]),
@@ -252,7 +261,10 @@ function App() {
 
       setRows(nextRows);
       if (nextAccounts.length) setAccounts(nextAccounts);
-      if (showMessage) setMessage(`Database Google Sheets dimuat: ${nextRows.length} baris.`);
+      if (showMessage) {
+        const sourceSheet = payload.sourceSheet ? ` dari tab ${payload.sourceSheet}` : '';
+        setMessage(`Database Google Sheets dimuat${sourceSheet}: ${nextRows.length} baris.`);
+      }
     } catch {
       setMessage('Gagal memuat database Google Sheets. Cek URL Web App, izin deploy, dan SPREADSHEET_ID Apps Script.');
     }
@@ -444,7 +456,7 @@ function App() {
               >
                 {accounts.map((account) => (
                   <option key={account.kode} value={account.kode}>
-                    {account.nama}
+                    {formatAccountOption(account)}
                   </option>
                 ))}
               </select>
@@ -528,6 +540,7 @@ function App() {
                     </div>
                     <span className="whitespace-nowrap text-sm font-semibold">{rupiah(usage.saldo)}</span>
                   </div>
+                  <p className="mt-2 break-all rounded bg-zinc-50 p-2 font-mono text-[11px] text-zinc-600">{account.kode}</p>
                   <div className="mt-2 h-2 rounded bg-zinc-200">
                     <div className="h-2 rounded bg-blue-600" style={{ width: `${pct}%` }} />
                   </div>
@@ -573,7 +586,7 @@ function App() {
                       <td className="whitespace-nowrap p-2">{row.tahap === 'Persetujuan' ? row.statusPersetujuan || 'Disetujui' : row.statusPJ}</td>
                       <td className="whitespace-nowrap p-2">{row.statusGeotag}</td>
                       <td className="whitespace-nowrap p-2 text-right">{rupiah(row.nilaiRiil)}</td>
-                      <td className="min-w-52 p-2">{accounts.find((account) => account.kode === row.kodeAkun)?.nama || row.kodeAkun}</td>
+                      <td className="min-w-80 p-2">{formatAccountName(accounts.find((account) => account.kode === row.kodeAkun)) || row.kodeAkun}</td>
                     </tr>
                   ))
                 )}
