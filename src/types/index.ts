@@ -5,6 +5,13 @@ export interface GeotagEntry {
   wilayahTagging: string;
 }
 
+export interface GeotagIssue {
+  label: string;
+  expectedDate: string;
+  expectedLocation: string;
+  message: string;
+}
+
 export interface ParsedData {
   sourceType?: 'persetujuan' | 'pertanggungjawaban' | 'pelaksanaan';
   namaKegiatan: string;
