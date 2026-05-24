@@ -5,7 +5,7 @@ import { accountKindLabel, budgetAccounts, findBudgetAccount, type BudgetAccount
 import { getUangHarian, parseTanggalRange } from './data/sbmData';
 import { parsePerjadinClipboard } from './utils/parser';
 import { createGeotagStatementDocx, downloadBlob } from './utils/docxGenerator';
-import { geotagPointLabel, selectRequiredGeotagPoints } from './utils/geotagRules';
+import { geotagPointLabel, inferDestinationFromGeotags, selectRequiredGeotagPoints } from './utils/geotagRules';
 import type { GeotagIssue } from './types';
 
 type Stage = 'Persetujuan' | 'Pertanggungjawaban' | 'Pelaksanaan';
@@ -309,8 +309,7 @@ function App() {
     const detectedTujuan =
       tujuan ||
       parsed.kotaTujuan ||
-      parsed.geotags.at(-2)?.wilayahTagging ||
-      parsed.geotags.at(-1)?.wilayahTagging ||
+      inferDestinationFromGeotags(parsed.geotags, parsed.tanggalKegiatan) ||
       '';
     const range = parseTanggalRange(parsed.tanggalKegiatan);
     const uang = getUangHarian(detectedTujuan);
@@ -327,7 +326,7 @@ function App() {
         ? geotagRule.status
         : parsed.geotags.length > 0
           ? geotagRule.status
-          : 'Belum Ada';
+          : 'Tidak Lengkap';
 
     return {
       tahap,
