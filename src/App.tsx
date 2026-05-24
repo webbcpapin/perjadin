@@ -252,7 +252,10 @@ function App() {
 
       setRows(nextRows);
       if (nextAccounts.length) setAccounts(nextAccounts);
-      if (showMessage) setMessage(`Database Google Sheets dimuat: ${nextRows.length} baris.`);
+      if (showMessage) {
+        const sourceSheet = payload.sourceSheet ? ` dari tab ${payload.sourceSheet}` : '';
+        setMessage(`Database Google Sheets dimuat${sourceSheet}: ${nextRows.length} baris.`);
+      }
     } catch {
       setMessage('Gagal memuat database Google Sheets. Cek URL Web App, izin deploy, dan SPREADSHEET_ID Apps Script.');
     }
