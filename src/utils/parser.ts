@@ -1,12 +1,14 @@
-import type { ParsedData, GeotagEntry } from '@/types';
+import { normalizeAccountCode } from '@/data/perjadinAccounts';
+import type { GeotagEntry, ParsedData } from '@/types';
 
-export function parseDetailPertanggungjawaban(text: string): ParsedData | null {
-  if (!text || text.trim().length === 0) return null;
+const LABEL_RE = /^(Nama Kegiatan|Id Kegiatan|Nomor Kegiatan|Tujuan Kegiatan|Output|Tanggal Kegiatan|Kota Tujuan|Nomor ST|Lampiran ST|Kode Akun|Jenis Pembayaran|Total Estimasi Biaya|Total Uang Muka|Status|Peserta Kegiatan|Nomor Komitmen Anggaran|Uang Muka|Total Pengeluaran Riil|Total Kurang Bayar|Ringkasan|Rute Perjalanan Dinas|Geotagging Perjalan Dinas|Items per page)/i;
+const ACCOUNT_RE = /636722\.015\.52411[13]\.01505(?:CC|WA)\.\d{4}[A-Z]{3}\.A000000001\.00000\.2\.3051\.2\.000000\.000000/;
+const DATE_RE = /^(Sen|Sel|Rab|Kam|Jum|Sab|Min),?\s+\d{1,2}\s+\w+\s+\d{4}/i;
+const TIME_RE = /^\d{1,2}[:.]\d{2}$/;
 
-  // Normalize line endings and split
-  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').map(l => l.trim()).filter(l => l.length > 0);
-
-  const result: ParsedData = {
+function blankParsedData(sourceType: ParsedData['sourceType']): ParsedData {
+  return {
+    sourceType,
     namaKegiatan: '',
     idKegiatan: '',
     nomorST: '',
@@ -21,302 +23,263 @@ export function parseDetailPertanggungjawaban(text: string): ParsedData | null {
     totalPengeluaranRiil: 0,
     totalKurangBayar: 0,
   };
+}
 
-  let i = 0;
+function linesFromText(text: string) {
+  return text
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function isLabel(line: string) {
+  return LABEL_RE.test(line);
+}
+
+function valueAfterLabel(lines: string[], label: RegExp, options: { multiline?: boolean; maxLines?: number } = {}) {
+  const maxLines = options.maxLines ?? 4;
+
+  for (let i = 0; i < lines.length; i++) {
+    if (!label.test(lines[i])) continue;
+
+    const inline = lines[i]
+      .replace(label, '')
+      .replace(/^[:\t\s-]+/, '')
+      .trim();
+
+    if (inline && !isLabel(inline)) return inline;
+
+    const values: string[] = [];
+    for (let j = i + 1; j < lines.length && j <= i + maxLines; j++) {
+      if (isLabel(lines[j])) break;
+      if (lines[j] === '-') break;
+      values.push(lines[j]);
+      if (!options.multiline) break;
+    }
+
+    return values.join(options.multiline ? ' ' : '').trim();
+  }
+
+  return '';
+}
+
+function findFirstMatch(lines: string[], pattern: RegExp) {
+  for (const line of lines) {
+    const match = line.match(pattern);
+    if (match?.[1]) return match[1].trim();
+  }
+  return '';
+}
+
+function currencyAfterLabel(lines: string[], label: RegExp) {
+  for (let i = 0; i < lines.length; i++) {
+    if (!label.test(lines[i])) continue;
+    for (let j = i; j < lines.length && j <= i + 4; j++) {
+      const amount = parseRupiah(lines[j]);
+      if (amount > 0) return amount;
+    }
+  }
+  return 0;
+}
+
+function parseRupiah(value: string) {
+  const match = value.match(/Rp\s*([\d.,]+)/i);
+  if (!match) return 0;
+  return Number(match[1].replace(/[.,]/g, '')) || 0;
+}
+
+function extractAccountCode(text: string) {
+  const compact = text.replace(/\s+/g, '');
+  const match = compact.match(ACCOUNT_RE);
+  return match ? normalizeAccountCode(match[0]) : '';
+}
+
+function findWindowMatch(lines: string[], startPattern: RegExp, valuePattern: RegExp, maxLines = 8) {
+  for (let i = 0; i < lines.length; i++) {
+    if (!startPattern.test(lines[i])) continue;
+    for (let j = i; j < lines.length && j <= i + maxLines; j++) {
+      const match = lines[j].match(valuePattern);
+      if (match?.[1]) return match[1].trim();
+    }
+  }
+  return '';
+}
+
+export function parseDetailPerjalananDinas(text: string): ParsedData | null {
+  if (!text.trim()) return null;
+
+  const lower = text.toLowerCase();
+  const looksLikeDetail =
+    lower.includes('detail perjalanan dinas') ||
+    lower.includes('data perjadin') ||
+    lower.includes('ringkasan dipa') ||
+    lower.includes('kode akun');
+
+  if (!looksLikeDetail) return null;
+
+  const lines = linesFromText(text);
+  const result = blankParsedData(
+    lower.includes('ringkasan dipa') || lower.includes('kode akun') ? 'persetujuan' : 'pelaksanaan',
+  );
+
+  result.namaKegiatan = valueAfterLabel(lines, /^Nama Kegiatan/i);
+  result.idKegiatan = valueAfterLabel(lines, /^Id Kegiatan/i);
+  result.nomorKegiatan = valueAfterLabel(lines, /^Nomor Kegiatan/i) || findFirstMatch(lines, /(KPD-\d+\/\d+-\d+)/i);
+  result.nomorST = valueAfterLabel(lines, /^Nomor ST/i) || findFirstMatch(lines, /(ST-\d+\/[A-Z.0-9]+\/\d+)/i);
+  result.lampiranST = [valueAfterLabel(lines, /^Lampiran ST/i)].filter(Boolean);
+  result.tanggalKegiatan = valueAfterLabel(lines, /^Tanggal Kegiatan/i);
+  result.kotaTujuan = valueAfterLabel(lines, /^Kota Tujuan/i);
+  result.output = valueAfterLabel(lines, /^Output/i);
+  result.kodeAkun = extractAccountCode(text) || valueAfterLabel(lines, /^Kode Akun/i, { multiline: true, maxLines: 5 });
+  result.jenisPembayaran = valueAfterLabel(lines, /^Jenis Pembayaran/i);
+  result.totalEstimasiBiaya = currencyAfterLabel(lines, /^Total Estimasi Biaya/i);
+  result.totalUangMuka = currencyAfterLabel(lines, /^Total Uang Muka/i);
+  result.uangMuka = result.totalUangMuka || 0;
+  result.status = valueAfterLabel(lines, /^Status/i);
+
+  return result;
+}
+
+export function parseDetailPertanggungjawaban(text: string): ParsedData | null {
+  if (!text.trim()) return null;
+
+  const lower = text.toLowerCase();
+  const looksLikePertanggungjawaban =
+    lower.includes('detail pertanggungjawaban') ||
+    lower.includes('total pengeluaran riil') ||
+    lower.includes('total kurang bayar') ||
+    lower.includes('nomor komitmen anggaran');
+
+  if (!looksLikePertanggungjawaban) return null;
+
+  const lines = linesFromText(text);
+  const result = blankParsedData('pertanggungjawaban');
   let inGeotagSection = false;
   let lastHariTanggal = '';
 
-  while (i < lines.length) {
-    const line = lines[i];
+  result.namaKegiatan = valueAfterLabel(lines, /^Nama Kegiatan/i);
+  result.idKegiatan = valueAfterLabel(lines, /^Id Kegiatan/i);
+  result.nomorST = valueAfterLabel(lines, /^Nomor ST/i) || findFirstMatch(lines, /(ST-\d+\/[A-Z.0-9]+\/\d+)/i);
+  result.lampiranST = [valueAfterLabel(lines, /^Lampiran ST/i)].filter(Boolean);
+  result.tanggalKegiatan = valueAfterLabel(lines, /^Tanggal Kegiatan/i);
+  result.nomorKegiatan = valueAfterLabel(lines, /^Nomor Kegiatan/i) || findFirstMatch(lines, /(KPD-\d+\/\d+-\d+)/i);
+  result.nomorKomitmenAnggaran =
+    findWindowMatch(lines, /^Nomor Komitmen Anggaran/i, /(NKA-\d+\/\d+-\d+)/i) ||
+    findFirstMatch(lines, /(NKA-\d+\/\d+-\d+)/i);
+  result.peserta = valueAfterLabel(lines, /^Peserta Kegiatan/i);
+  result.uangMuka = currencyAfterLabel(lines, /^Uang Muka/i);
+  result.totalPengeluaranRiil = currencyAfterLabel(lines, /^Total Pengeluaran Riil/i);
+  result.totalKurangBayar = currencyAfterLabel(lines, /^Total Kurang Bayar/i);
+  result.kodeAkun = extractAccountCode(text);
+
+  const ruteMatch = text.match(/terdapat\s+(\d+)\s+Rute/i);
+  if (ruteMatch) result.jumlahRute = Number(ruteMatch[1]) || 1;
+
+  for (const line of lines) {
     const lineLower = line.toLowerCase();
 
-    // Nama Kegiatan
-    if (line.startsWith('Nama Kegiatan')) {
-      const tabParts = line.split('\t');
-      if (tabParts.length > 1 && tabParts[1].trim()) {
-        result.namaKegiatan = tabParts[1].trim();
-      } else {
-        // Check next line for value
-        if (i + 1 < lines.length && !lines[i+1].includes('\t') && !lines[i+1].includes('Id')) {
-          result.namaKegiatan = lines[i+1].trim();
-        }
-      }
-    }
-
-    // ID Kegiatan
-    if (line.startsWith('Id Kegiatan')) {
-      const match = line.match(/Id Kegiatan\s*\t*\s*([a-f0-9-]+)/i);
-      if (match) result.idKegiatan = match[1].trim();
-      else {
-        const tabParts = line.split('\t');
-        if (tabParts.length > 1) result.idKegiatan = tabParts[1].trim();
-      }
-    }
-
-    // Nomor ST - check for ST- pattern anywhere
-    if (line.match(/^ST-\d+/i) && !result.nomorST) {
-      result.nomorST = line.trim();
-    }
-    if (line.startsWith('Nomor ST') || lineLower.startsWith('nomor st')) {
-      const tabParts = line.split('\t');
-      if (tabParts.length > 1 && tabParts[1].trim().startsWith('ST-')) {
-        result.nomorST = tabParts[1].trim();
-      }
-    }
-
-    // Tanggal Kegiatan
-    if (lineLower.startsWith('tanggal kegiatan')) {
-      const tabParts = line.split('\t');
-      if (tabParts.length > 1) {
-        result.tanggalKegiatan = tabParts[1].trim();
-      } else {
-        const match = line.match(/(\d{2}-\d{2}-\d{4}\s*s\/d\s*\d{2}-\d{2}-\d{4})/);
-        if (match) result.tanggalKegiatan = match[1];
-      }
-    }
-
-    // Nomor Kegiatan (NKA)
-    if (lineLower.startsWith('nomor kegiatan')) {
-      const tabParts = line.split('\t');
-      if (tabParts.length > 1) result.nomorKegiatan = tabParts[1].trim();
-    }
-    // Also detect KPD-XXX pattern
-    if (line.match(/^KPD-\d+\/\d+-\d+$/) && !result.nomorKegiatan) {
-      result.nomorKegiatan = line.trim();
-    }
-
-    // Jumlah Rute
-    const ruteMatch = line.match(/terdapat (\d+) Rute/i);
-    if (ruteMatch) result.jumlahRute = parseInt(ruteMatch[1], 10);
-
-    // Peserta
-    if (lineLower.startsWith('peserta kegiatan')) {
-      const tabParts = line.split('\t');
-      if (tabParts.length > 1) {
-        result.peserta = tabParts[1].trim();
-      } else if (i + 1 < lines.length && !lines[i+1].startsWith('Nomor')) {
-        result.peserta = lines[i+1].trim();
-      }
-    }
-
-    // NKA / Nomor Komitmen Anggaran
-    if (line.match(/^NKA-\d+\/\d+-\d+$/) && !result.nomorKegiatan) {
-      result.nomorKegiatan = line.trim();
-    }
-    if (lineLower.includes('komitmen anggaran')) {
-      if (i + 2 < lines.length) {
-        const nkaLine = lines[i+2];
-        if (nkaLine && nkaLine.match(/^NKA-/)) {
-          result.nomorKegiatan = nkaLine.trim();
-        }
-      }
-    }
-
-    // Uang Muka
-    if (lineLower.startsWith('uang muka') && !lineLower.includes('total')) {
-      const match = line.match(/Rp\s*([\d.,]+)/);
-      if (match) result.uangMuka = parseInt(match[1].replace(/[.,]/g, ''), 10);
-      else if (i + 1 < lines.length) {
-        const nextMatch = lines[i+1].match(/Rp\s*([\d.,]+)/);
-        if (nextMatch) result.uangMuka = parseInt(nextMatch[1].replace(/[.,]/g, ''), 10);
-      }
-    }
-
-    // Total Pengeluaran Riil
-    if (lineLower.includes('total pengeluaran riil') || lineLower.includes('pengeluaran riil')) {
-      const match = line.match(/Rp\s*([\d.,]+)/);
-      if (match) {
-        result.totalPengeluaranRiil = parseInt(match[1].replace(/[.,]/g, ''), 10);
-      } else {
-        // Check next line
-        if (i + 1 < lines.length) {
-          const nextMatch = lines[i+1].match(/Rp\s*([\d.,]+)/);
-          if (nextMatch) result.totalPengeluaranRiil = parseInt(nextMatch[1].replace(/[.,]/g, ''), 10);
-        }
-      }
-    }
-
-    // Total Kurang Bayar
-    if (lineLower.includes('total kurang bayar') || lineLower.includes('kurang bayar')) {
-      const match = line.match(/Rp\s*([\d.,]+)/);
-      if (match) {
-        result.totalKurangBayar = parseInt(match[1].replace(/[.,]/g, ''), 10);
-      } else {
-        if (i + 1 < lines.length) {
-          const nextMatch = lines[i+1].match(/Rp\s*([\d.,]+)/);
-          if (nextMatch) result.totalKurangBayar = parseInt(nextMatch[1].replace(/[.,]/g, ''), 10);
-        }
-      }
-    }
-
-    // === GEOTAG PARSING - IMPROVED ===
-    // Detect geotag section header
     if (lineLower.includes('geotagging') || lineLower.includes('geotag')) {
       inGeotagSection = true;
-      i++;
       continue;
     }
 
-    // Detect geotag table header
-    if (inGeotagSection && (lineLower.includes('hari, tanggal') || lineLower.includes('waktu tagging'))) {
-      i++;
+    if (!inGeotagSection) continue;
+
+    if (
+      lineLower.includes('items per page') ||
+      lineLower.includes('ringkasan') ||
+      lineLower.includes('peserta kegiatan') ||
+      /^\d+\s*[–-]\s*\d+\s+of\s+\d+$/i.test(line)
+    ) {
+      inGeotagSection = false;
       continue;
     }
 
-    // Parse geotag data rows - handle both full rows and partial rows
-    if (inGeotagSection) {
-      // Stop conditions
-      if (lineLower.includes('items per page') ||
-          lineLower.includes('ringkasan') ||
-          lineLower.includes('peserta kegiatan') ||
-          lineLower.match(/^\d+\s*–\s*\d+\s+of\s+\d+$/)) {
-        inGeotagSection = false;
-        i++;
-        continue;
-      }
-
-      // Try to parse as geotag row
-      const geotag = parseGeotagLine(line, lastHariTanggal);
-      if (geotag) {
-        if (geotag.hariTanggal) lastHariTanggal = geotag.hariTanggal;
-        result.geotags.push(geotag);
-        i++;
-        continue;
-      }
+    if (lineLower.includes('hari, tanggal') || lineLower.includes('waktu tagging') || lineLower.includes('lokasi tagging')) {
+      continue;
     }
 
-    i++;
-  }
+    const geotag = parseGeotagLine(line, lastHariTanggal);
+    if (!geotag) continue;
 
-  // Fallback: find ST number
-  if (!result.nomorST) {
-    for (const line of lines) {
-      const match = line.match(/(ST-\d+\/[^\s]+\/\d+)/);
-      if (match) { result.nomorST = match[1]; break; }
-    }
-  }
-
-  // Fallback: find NKA
-  if (!result.nomorKegiatan) {
-    for (const line of lines) {
-      const match = line.match(/(NKA-\d+\/\d+-\d+)/);
-      if (match) { result.nomorKegiatan = match[1]; break; }
-    }
-    // Also try KPD pattern
-    if (!result.nomorKegiatan) {
-      for (const line of lines) {
-        const match = line.match(/(KPD-\d+\/\d+-\d+)/);
-        if (match) { result.nomorKegiatan = match[1]; break; }
-      }
-    }
-  }
-
-  // Fallback: find peserta
-  if (!result.peserta) {
-    for (let idx = 0; idx < lines.length; idx++) {
-      if (lines[idx].toLowerCase().includes('peserta kegiatan') && idx + 1 < lines.length) {
-        result.peserta = lines[idx + 1].trim();
-        break;
-      }
-    }
+    if (geotag.hariTanggal) lastHariTanggal = geotag.hariTanggal;
+    result.geotags.push(geotag);
   }
 
   return result;
 }
 
-/**
- * Parse a single geotag line.
- * Handles two formats:
- * 1. Full row: "Kam, 15 Jan 2026\t08.39\tJl. Yos...\tKab. Bangka"
- * 2. Partial row: "\t10.02\tJl. Yos...\tKab. Bangka" (no date, inherits from previous)
- */
+export function parsePerjadinClipboard(text: string): ParsedData | null {
+  return parseDetailPertanggungjawaban(text) || parseDetailPerjalananDinas(text);
+}
+
 function parseGeotagLine(line: string, lastHariTanggal: string): GeotagEntry | null {
-  // Skip empty lines, page indicators, and non-data lines
-  if (!line || line.length === 0) return null;
-  if (line.match(/^\d+\s*–\s*\d+\s+of\s+\d+$/)) return null;
-  if (line.toLowerCase().includes('items per page')) return null;
+  if (!line || line.includes('-\t-') || /^\s*-+\s*$/.test(line)) return null;
+  if (/items per page/i.test(line)) return null;
 
-  const tabParts = line.split('\t');
-
-  // Format 1: Full row with date (4+ columns)
-  if (tabParts.length >= 4) {
-    const col0 = tabParts[0].trim();
-    const col1 = tabParts[1].trim();
-    const col2 = tabParts[2].trim();
-    const col3 = tabParts[tabParts.length - 1].trim(); // Last col = wilayah
-
-    // Check if col0 looks like a date (contains day name or date pattern)
-    const hasDate = col0.match(/^(Sen|Sel|Rab|Kam|Jum|Sab|Min),?\s+\d{1,2}\s+/i);
-    const hasTime = col1.match(/^\d{1,2}[:.]\d{2}$/);
-
-    if (hasDate && hasTime) {
-      return {
-        hariTanggal: col0,
-        waktuTagging: col1.replace('.', ':'),
-        lokasiTagging: col2,
-        wilayahTagging: col3,
-      };
-    }
+  const tabParts = line.split('\t').map((part) => part.trim()).filter(Boolean);
+  if (tabParts.length >= 4 && DATE_RE.test(tabParts[0]) && TIME_RE.test(tabParts[1])) {
+    return {
+      hariTanggal: tabParts[0],
+      waktuTagging: normalizeTime(tabParts[1]),
+      lokasiTagging: tabParts.slice(2, -1).join(' '),
+      wilayahTagging: tabParts.at(-1) || '',
+    };
   }
 
-  // Format 2: Partial row without date (3+ columns, first is empty or time)
-  if (tabParts.length >= 3 && lastHariTanggal) {
-    const col0 = tabParts[0].trim();
-    const col1 = tabParts[1].trim();
-    const col2 = tabParts[2].trim();
-    const colLast = tabParts[tabParts.length - 1].trim();
-
-    // col0 is empty (inherited date) or col0 is time
-    const col0IsEmpty = col0 === '';
-    const col0IsTime = col0.match(/^\d{1,2}[:.]\d{2}$/);
-    const col1IsTime = col1.match(/^\d{1,2}[:.]\d{2}$/);
-
-    if (col0IsEmpty && col1IsTime) {
-      return {
-        hariTanggal: lastHariTanggal,
-        waktuTagging: col1.replace('.', ':'),
-        lokasiTagging: col2,
-        wilayahTagging: colLast,
-      };
-    }
-
-    if (col0IsTime) {
-      return {
-        hariTanggal: lastHariTanggal,
-        waktuTagging: col0.replace('.', ':'),
-        lokasiTagging: col1,
-        wilayahTagging: colLast,
-      };
-    }
+  if (tabParts.length >= 3 && lastHariTanggal && TIME_RE.test(tabParts[0])) {
+    return {
+      hariTanggal: lastHariTanggal,
+      waktuTagging: normalizeTime(tabParts[0]),
+      lokasiTagging: tabParts.slice(1, -1).join(' '),
+      wilayahTagging: tabParts.at(-1) || '',
+    };
   }
 
-  // Try space-separated format: "10.02  9P9M+RVM, Air Jukung...  Kab. Bangka"
-  if (!line.includes('\t') && lastHariTanggal) {
-    const timeMatch = line.match(/^(\d{1,2}[:.]\d{2})\s+(.+?)\s+([A-Za-z\s\.]+)$/);
-    if (timeMatch) {
-      return {
-        hariTanggal: lastHariTanggal,
-        waktuTagging: timeMatch[1].replace('.', ':'),
-        lokasiTagging: timeMatch[2].trim(),
-        wilayahTagging: timeMatch[3].trim(),
-      };
-    }
+  const fullSpaceRow = line.match(
+    /^((?:Sen|Sel|Rab|Kam|Jum|Sab|Min),?\s+\d{1,2}\s+\w+\s+\d{4})\s+(\d{1,2}[:.]\d{2})\s+(.+?)\s+((?:Kota|Kab\.?|Kabupaten)\s+.+)$/i,
+  );
+  if (fullSpaceRow) {
+    return {
+      hariTanggal: fullSpaceRow[1],
+      waktuTagging: normalizeTime(fullSpaceRow[2]),
+      lokasiTagging: fullSpaceRow[3].trim(),
+      wilayahTagging: fullSpaceRow[4].trim(),
+    };
   }
+
+  const inheritedSpaceRow = line.match(/^(\d{1,2}[:.]\d{2})\s+(.+?)\s+((?:Kota|Kab\.?|Kabupaten)\s+.+)$/i);
+  if (inheritedSpaceRow && lastHariTanggal) {
+    return {
+      hariTanggal: lastHariTanggal,
+      waktuTagging: normalizeTime(inheritedSpaceRow[1]),
+      lokasiTagging: inheritedSpaceRow[2].trim(),
+      wilayahTagging: inheritedSpaceRow[3].trim(),
+    };
+  }
+
+  const dateOnly = line.match(DATE_RE);
+  if (dateOnly && line.includes('-')) return null;
 
   return null;
 }
 
+function normalizeTime(time: string) {
+  return time.replace('.', ':');
+}
+
 export function parseGeotagTable(text: string): GeotagEntry[] {
-  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').map(l => l.trim()).filter(l => l.length > 0);
   const entries: GeotagEntry[] = [];
   let lastHariTanggal = '';
 
-  for (const line of lines) {
+  for (const line of linesFromText(text)) {
     const geotag = parseGeotagLine(line, lastHariTanggal);
-    if (geotag) {
-      if (geotag.hariTanggal) lastHariTanggal = geotag.hariTanggal;
-      entries.push(geotag);
-    }
+    if (!geotag) continue;
+
+    if (geotag.hariTanggal) lastHariTanggal = geotag.hariTanggal;
+    entries.push(geotag);
   }
 
   return entries;
@@ -330,22 +293,11 @@ export function detectGeotagPoints(geotags: GeotagEntry[]): {
 } {
   if (geotags.length === 0) return {};
 
-  // Sort by original order (they should already be in chronological order)
-  const sorted = [...geotags]; // Keep original order from input
+  const sorted = [...geotags];
+  if (sorted.length === 1) return { start: sorted[0], clockIn: sorted[0], clockOut: sorted[0], end: sorted[0] };
+  if (sorted.length === 2) return { start: sorted[0], clockIn: sorted[1], clockOut: sorted[1], end: sorted[1] };
+  if (sorted.length === 3) return { start: sorted[0], clockIn: sorted[1], clockOut: sorted[1], end: sorted[2] };
 
-  if (sorted.length === 1) {
-    return { start: sorted[0], clockIn: sorted[0], clockOut: sorted[0], end: sorted[0] };
-  }
-
-  if (sorted.length === 2) {
-    return { start: sorted[0], clockIn: sorted[1], clockOut: sorted[1], end: sorted[1] };
-  }
-
-  if (sorted.length === 3) {
-    return { start: sorted[0], clockIn: sorted[1], clockOut: sorted[1], end: sorted[2] };
-  }
-
-  // 4+ geotags: first=START, second=CLOCK IN, second-to-last=CLOCK OUT, last=END
   return {
     start: sorted[0],
     clockIn: sorted[1],
@@ -355,32 +307,23 @@ export function detectGeotagPoints(geotags: GeotagEntry[]): {
 }
 
 export function calculateDurationMinutes(clockIn: string, clockOut: string): number {
-  const parseTime = (t: string): number => {
-    const cleaned = t.replace(/\./g, ':').trim();
-    const parts = cleaned.split(':');
-    if (parts.length >= 2) {
-      const h = parseInt(parts[0], 10);
-      const m = parseInt(parts[1], 10);
-      if (!isNaN(h) && !isNaN(m)) return h * 60 + m;
-    }
-    return 0;
+  const parseTime = (time: string): number => {
+    const parts = time.replace(/\./g, ':').trim().split(':');
+    if (parts.length < 2) return 0;
+
+    const hours = Number(parts[0]);
+    const minutes = Number(parts[1]);
+    return Number.isFinite(hours) && Number.isFinite(minutes) ? hours * 60 + minutes : 0;
   };
 
   const inMinutes = parseTime(clockIn);
   const outMinutes = parseTime(clockOut);
-
-  if (outMinutes <= inMinutes) {
-    return (24 * 60 - inMinutes) + outMinutes;
-  }
-  return outMinutes - inMinutes;
+  return outMinutes <= inMinutes ? 24 * 60 - inMinutes + outMinutes : outMinutes - inMinutes;
 }
 
-/**
- * Test the parser with sample data
- */
 export function testParser(text: string): { success: boolean; data?: ParsedData; errors: string[] } {
   const errors: string[] = [];
-  const data = parseDetailPertanggungjawaban(text);
+  const data = parsePerjadinClipboard(text);
 
   if (!data) {
     errors.push('Parser returned null');
@@ -391,10 +334,10 @@ export function testParser(text: string): { success: boolean; data?: ParsedData;
   if (!data.idKegiatan) errors.push('ID Kegiatan tidak terdeteksi');
   if (!data.nomorST) errors.push('Nomor ST tidak terdeteksi');
   if (!data.tanggalKegiatan) errors.push('Tanggal tidak terdeteksi');
-  if (!data.peserta) errors.push('Peserta tidak terdeteksi');
-  if (data.totalPengeluaranRiil === 0) errors.push('Total Pengeluaran Riil = 0 (mungkin parsing gagal)');
-  if (data.geotags.length === 0) errors.push('Tidak ada geotag terdeteksi');
-  else if (data.geotags.length < 4) errors.push(`Hanya ${data.geotags.length} geotag terdeteksi (diharapkan >= 4)`);
+  if (data.sourceType === 'pertanggungjawaban' && !data.peserta) errors.push('Peserta tidak terdeteksi');
+  if (data.sourceType === 'pertanggungjawaban' && data.totalPengeluaranRiil === 0) errors.push('Total Pengeluaran Riil = 0');
+  if (data.sourceType === 'pertanggungjawaban' && data.geotags.length === 0) errors.push('Tidak ada geotag terdeteksi');
+  if (data.sourceType === 'persetujuan' && !data.kodeAkun) errors.push('Kode akun tidak terdeteksi');
 
   return { success: errors.length === 0, data, errors };
 }
