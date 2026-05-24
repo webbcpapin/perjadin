@@ -1,23 +1,92 @@
-const SPREADSHEET_ID = 'ISI_ID_SPREADSHEET_ANDA';
+const SPREADSHEET_ID = '1fkXASbZbnPCZeW2FSxteE-oOnacVuJRCxQ8zWOgPRh8';
 
 const HEADERS_DATA = [
-  'ID Kegiatan','Nama Kegiatan','Nomor ST','NKA/Nomor Kegiatan','Tanggal Kegiatan','Tujuan','Nama Pegawai','Lama (Hari)','Uang Harian per Hari','Total Uang Harian','Uang Muka','Total Pengeluaran Riil','Kurang/Lebih Bayar','Status Pertanggungjawaban','Status Geotag','START','CLOCK IN','CLOCK OUT','END','VOLUME','NILAI RIIL','Kode Akun','Detail Geotag','Tanggal Input'
+  'ID Kegiatan',
+  'Nama Kegiatan',
+  'Nomor ST',
+  'NKA/Nomor Kegiatan',
+  'Tanggal Kegiatan',
+  'Tujuan',
+  'Nama Pegawai',
+  'Lama (Hari)',
+  'Uang Harian per Hari',
+  'Total Uang Harian',
+  'Uang Muka',
+  'Total Pengeluaran Riil',
+  'Kurang/Lebih Bayar',
+  'Status Pertanggungjawaban',
+  'Status Geotag',
+  'START',
+  'CLOCK IN',
+  'CLOCK OUT',
+  'END',
+  'VOLUME',
+  'NILAI RIIL',
+  'Kode Akun',
+  'Detail Geotag',
+  'Tanggal Input',
+  'Tahap Data',
+  'Status Persetujuan',
+  'Nomor Kegiatan KPD',
+  'Output',
+  'Kota Tujuan',
+  'Jenis Pembayaran',
+  'Total Estimasi Biaya',
+  'Total Uang Muka'
 ];
-const HEADERS_AKUN = ['Kode Akun','Nama Akun','Pagu','Realisasi','Komitmen','Saldo'];
 
-function ss_() { return SpreadsheetApp.openById(SPREADSHEET_ID); }
+const HEADERS_AKUN = ['Kode Akun', 'Nama Akun', 'Pagu', 'Realisasi', 'Komitmen', 'Saldo'];
+
+const DEFAULT_ACCOUNTS = [
+  ['636722.015.524111.01505CC.4787AEF.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4787.AEF', 3300000, 0, 0, 3300000],
+  ['636722.015.524113.01505CC.4787AEF.A000000001.00000.2.3051.2.000000.000000', '524113 Dalam Kota - 4787.AEF', 480000, 0, 0, 480000],
+  ['636722.015.524111.01505CC.4787BAE.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4787.BAE', 5400000, 0, 0, 5400000],
+  ['636722.015.524113.01505CC.4787BAE.A000000001.00000.2.3051.2.000000.000000', '524113 Dalam Kota - 4787.BAE', 960000, 0, 0, 960000],
+  ['636722.015.524111.01505CC.4787BIG.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4787.BIG', 36000000, 0, 0, 36000000],
+  ['636722.015.524113.01505CC.4787BIG.A000000001.00000.2.3051.2.000000.000000', '524113 Dalam Kota - 4787.BIG', 16800000, 0, 0, 16800000],
+  ['636722.015.524111.01505CC.4789BIG.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4789.BIG', 31800000, 0, 0, 31800000],
+  ['636722.015.524113.01505CC.4789BIG.A000000001.00000.2.3051.2.000000.000000', '524113 Dalam Kota - 4789.BIG', 4800000, 0, 0, 4800000],
+  ['636722.015.524111.01505WA.4695EBA.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4695.EBA', 39419000, 0, 0, 39419000],
+  ['636722.015.524113.01505WA.4695EBA.A000000001.00000.2.3051.2.000000.000000', '524113 Dalam Kota - 4695.EBA', 3240000, 0, 0, 3240000],
+  ['636722.015.524111.01505WA.4698EBD.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4698.EBD', 1800000, 0, 0, 1800000],
+  ['636722.015.524113.01505WA.4698EBD.A000000001.00000.2.3051.2.000000.000000', '524113 Dalam Kota - 4698.EBD', 720000, 0, 0, 720000]
+];
+
+function ss_() {
+  return SpreadsheetApp.openById(SPREADSHEET_ID);
+}
+
 function sheet_(name, headers) {
   const ss = ss_();
   let sh = ss.getSheetByName(name);
   if (!sh) sh = ss.insertSheet(name);
-  if (sh.getLastRow() === 0) sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+
+  if (sh.getLastRow() === 0) {
+    sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+    return sh;
+  }
+
+  const lastColumn = Math.max(sh.getLastColumn(), 1);
+  const existing = sh.getRange(1, 1, 1, lastColumn).getValues()[0].filter(String);
+  if (existing.length === 0) {
+    sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+    return sh;
+  }
+
+  const missing = headers.filter(function(header) { return existing.indexOf(header) === -1; });
+  if (missing.length > 0) {
+    sh.getRange(1, existing.length + 1, 1, missing.length).setValues([missing]).setFontWeight('bold');
+  }
+
   return sh;
 }
 
 function doGet() {
-  const data = readSheet_('DATA_PERJADIN');
-  const akun = readSheet_('AKUN_ANGGARAN');
-  return ContentService.createTextOutput(JSON.stringify({ success: true, data, akun })).setMimeType(ContentService.MimeType.JSON);
+  ensureAccounts_();
+  refreshAkun_();
+  const data = readSheet_('DATA_PERJADIN', HEADERS_DATA);
+  const akun = readSheet_('AKUN_ANGGARAN', HEADERS_AKUN);
+  return out_({ success: true, data: data, akun: akun });
 }
 
 function doPost(e) {
@@ -33,38 +102,178 @@ function doPost(e) {
 
 function upsertPerjadin_(r) {
   const sh = sheet_('DATA_PERJADIN', HEADERS_DATA);
-  const key = [r.idKegiatan, r.nomorST, r.namaPegawai].join('|');
+  const headers = headerMap_(sh);
+  const key = [r.tahap || 'Pertanggungjawaban', r.idKegiatan, r.nomorST, r.namaPegawai || r.nomorKegiatan || r.nka].join('|');
   const values = sh.getDataRange().getValues();
   let target = -1;
+
   for (let i = 1; i < values.length; i++) {
-    const existingKey = [values[i][0], values[i][2], values[i][6]].join('|');
-    if (existingKey === key) { target = i + 1; break; }
+    const existingKey = [
+      values[i][headers['Tahap Data']] || 'Pertanggungjawaban',
+      values[i][headers['ID Kegiatan']],
+      values[i][headers['Nomor ST']],
+      values[i][headers['Nama Pegawai']] || values[i][headers['Nomor Kegiatan KPD']] || values[i][headers['NKA/Nomor Kegiatan']]
+    ].join('|');
+    if (existingKey === key) {
+      target = i + 1;
+      break;
+    }
   }
-  const row = [r.idKegiatan,r.namaKegiatan,r.nomorST,r.nka,r.tanggalKegiatan,r.tujuan,r.namaPegawai,r.lamaHari,r.uangHarianPerHari,r.totalUangHarian,r.uangMuka,r.totalPengeluaranRiil,r.kurangLebihBayar,r.statusPJ,r.statusGeotag,r.start,r.clockIn,r.clockOut,r.end,r.volume,r.nilaiRiil,r.kodeAkun,r.detailGeotag,r.tanggalInput || new Date()];
+
+  const rowObject = rowObject_(r);
+  const currentHeaders = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  const row = currentHeaders.map(function(header) {
+    return rowObject[header] !== undefined ? rowObject[header] : '';
+  });
+
   if (target > 0) sh.getRange(target, 1, 1, row.length).setValues([row]);
   else sh.appendRow(row);
+
   refreshAkun_();
   return out_({ success: true, message: target > 0 ? 'Updated' : 'Inserted' });
 }
 
+function saveAccounts_(accounts) {
+  const sh = sheet_('AKUN_ANGGARAN', HEADERS_AKUN);
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, HEADERS_AKUN.length).clearContent();
+
+  const rows = accounts.map(function(account) {
+    return [
+      account.kode || account['Kode Akun'] || '',
+      account.nama || account['Nama Akun'] || '',
+      Number(account.pagu || account.Pagu) || 0,
+      Number(account.realisasi || account.Realisasi) || 0,
+      Number(account.komitmen || account.Komitmen) || 0,
+      Number(account.saldo || account.Saldo) || 0
+    ];
+  }).filter(function(row) { return row[0]; });
+
+  if (rows.length > 0) sh.getRange(2, 1, rows.length, HEADERS_AKUN.length).setValues(rows);
+  refreshAkun_();
+  return out_({ success: true, message: 'Accounts saved', count: rows.length });
+}
+
+function rowObject_(r) {
+  const nka = r.nka || r.nomorKegiatan || '';
+  const kurangLebih = r.kurangLebihBayar || 0;
+  const buktiGeotag = r.statusGeotag === 'Lengkap' ? 'Lengkap' : 'Belum Lengkap';
+
+  return {
+    'ID Kegiatan': r.idKegiatan || '',
+    'Nama Kegiatan': r.namaKegiatan || '',
+    'Nomor ST': r.nomorST || '',
+    'NKA/Nomor Kegiatan': nka,
+    'NKA / Nomor Kegiatan': nka,
+    'Tanggal Kegiatan': r.tanggalKegiatan || '',
+    'Tujuan': r.tujuan || '',
+    'Nama Pegawai': r.namaPegawai || '',
+    'Lama (Hari)': r.lamaHari || 1,
+    'Uang Harian per Hari': r.uangHarianPerHari || 0,
+    'Total Uang Harian': r.totalUangHarian || 0,
+    'Uang Muka': r.uangMuka || 0,
+    'Total Pengeluaran Riil': r.totalPengeluaranRiil || 0,
+    'Kurang/Lebih Bayar': kurangLebih,
+    'Kurang / Lebih Bayar': kurangLebih,
+    'Status Pertanggungjawaban': r.statusPJ || 'Belum Lengkap',
+    'Status PJ': r.statusPJ || 'Belum Lengkap',
+    'Status Geotag': r.statusGeotag || '',
+    'Detail Geotag': r.detailGeotag || '',
+    'Tanggal Input': r.tanggalInput || new Date(),
+    'START': r.start || '',
+    'CLOCK IN': r.clockIn || '',
+    'CLOCK OUT': r.clockOut || '',
+    'END': r.end || '',
+    'VOLUME': r.volume || 1,
+    'NILAI RIIL': r.nilaiRiil || r.totalEstimasiBiaya || r.totalPengeluaranRiil || 0,
+    'Kode Akun': r.kodeAkun || '',
+    'Tahap Data': r.tahap || 'Pertanggungjawaban',
+    'Status Persetujuan': r.statusPersetujuan || '',
+    'Nomor Kegiatan KPD': r.nomorKegiatan || '',
+    'Output': r.output || '',
+    'Kota Tujuan': r.kotaTujuan || '',
+    'Jenis Pembayaran': r.jenisPembayaran || '',
+    'Total Estimasi Biaya': r.totalEstimasiBiaya || 0,
+    'Total Uang Muka': r.totalUangMuka || r.uangMuka || 0,
+    'BUKTI DUKUNG\nSURAT PERNYATAAN GEOTAG': buktiGeotag,
+    'Keterangan': ''
+  };
+}
+
+function ensureAccounts_() {
+  const sh = sheet_('AKUN_ANGGARAN', HEADERS_AKUN);
+  if (sh.getLastRow() > 1) return;
+  sh.getRange(2, 1, DEFAULT_ACCOUNTS.length, HEADERS_AKUN.length).setValues(DEFAULT_ACCOUNTS);
+}
+
 function refreshAkun_() {
-  const akun = sheet_('AKUN_ANGGARAN', HEADERS_AKUN);
-  const data = sheet_('DATA_PERJADIN', HEADERS_DATA).getDataRange().getValues().slice(1);
-  const akunRows = akun.getDataRange().getValues();
+  const akunSheet = sheet_('AKUN_ANGGARAN', HEADERS_AKUN);
+  const dataSheet = sheet_('DATA_PERJADIN', HEADERS_DATA);
+  const akunRows = akunSheet.getDataRange().getValues();
+  const dataRows = dataSheet.getDataRange().getValues();
+  if (akunRows.length <= 1) return;
+
+  const dataHeaders = headerMap_(dataSheet);
+  const records = dataRows.slice(1).map(function(row) {
+    return {
+      idKegiatan: row[dataHeaders['ID Kegiatan']] || '',
+      nomorST: row[dataHeaders['Nomor ST']] || '',
+      kodeAkun: row[dataHeaders['Kode Akun']] || '',
+      tahap: row[dataHeaders['Tahap Data']] || 'Pertanggungjawaban',
+      statusPJ: row[dataHeaders['Status Pertanggungjawaban']] || 'Belum Lengkap',
+      nilai: Number(row[dataHeaders['NILAI RIIL']] || row[dataHeaders['Total Estimasi Biaya']] || row[dataHeaders['Total Pengeluaran Riil']]) || 0
+    };
+  }).filter(function(record) { return record.kodeAkun; });
+
   for (let i = 1; i < akunRows.length; i++) {
     const kode = akunRows[i][0];
     const pagu = Number(akunRows[i][2]) || 0;
-    const realisasi = data.filter(r => r[21] === kode && r[13] === 'Disetujui').reduce((a, r) => a + (Number(r[20]) || 0), 0);
-    const komitmen = data.filter(r => r[21] === kode && r[13] !== 'Disetujui').reduce((a, r) => a + (Number(r[20]) || 0), 0);
-    akun.getRange(i + 1, 4, 1, 3).setValues([[realisasi, komitmen, pagu - realisasi - komitmen]]);
+    const grouped = {};
+    records.filter(function(record) { return record.kodeAkun === kode; }).forEach(function(record) {
+      const key = [record.idKegiatan, record.nomorST, record.kodeAkun].join('|');
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(record);
+    });
+
+    let realisasi = 0;
+    let komitmen = 0;
+    Object.keys(grouped).forEach(function(key) {
+      const group = grouped[key];
+      const pjRows = group.filter(function(record) { return record.tahap === 'Pertanggungjawaban'; });
+      if (pjRows.length > 0) {
+        realisasi += pjRows.filter(function(record) { return record.statusPJ === 'Disetujui'; }).reduce(function(sum, record) { return sum + record.nilai; }, 0);
+        komitmen += pjRows.filter(function(record) { return record.statusPJ !== 'Disetujui'; }).reduce(function(sum, record) { return sum + record.nilai; }, 0);
+      } else {
+        komitmen += group.filter(function(record) { return record.tahap === 'Persetujuan'; }).reduce(function(sum, record) { return sum + record.nilai; }, 0);
+      }
+    });
+
+    akunSheet.getRange(i + 1, 4, 1, 3).setValues([[realisasi, komitmen, pagu - realisasi - komitmen]]);
   }
 }
 
-function readSheet_(name) {
-  const sh = ss_().getSheetByName(name);
+function readSheet_(name, headers) {
+  const sh = sheet_(name, headers);
   if (!sh || sh.getLastRow() === 0) return [];
   const values = sh.getDataRange().getValues();
-  const headers = values.shift();
-  return values.map(row => Object.fromEntries(headers.map((h, i) => [h, row[i]])));
+  const rowHeaders = values.shift();
+  return values.map(function(row) {
+    const obj = {};
+    rowHeaders.forEach(function(header, index) {
+      obj[header] = row[index];
+    });
+    return obj;
+  });
 }
-function out_(obj) { return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON); }
+
+function headerMap_(sh) {
+  const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  const map = {};
+  headers.forEach(function(header, index) {
+    map[header] = index;
+  });
+  return map;
+}
+
+function out_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}

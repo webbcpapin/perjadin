@@ -6,12 +6,20 @@ export interface GeotagEntry {
 }
 
 export interface ParsedData {
+  sourceType?: 'persetujuan' | 'pertanggungjawaban' | 'pelaksanaan';
   namaKegiatan: string;
   idKegiatan: string;
   nomorST: string;
   lampiranST: string[];
   tanggalKegiatan: string;
   nomorKegiatan: string;
+  kodeAkun?: string;
+  kotaTujuan?: string;
+  output?: string;
+  jenisPembayaran?: string;
+  totalEstimasiBiaya?: number;
+  totalUangMuka?: number;
+  status?: string;
   jumlahRute: number;
   geotags: GeotagEntry[];
   peserta: string;

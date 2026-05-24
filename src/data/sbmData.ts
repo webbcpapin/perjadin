@@ -105,25 +105,58 @@ export function getUangHarian(tujuan: string): {
   };
 }
 
+const bulanIndonesia: Record<string, number> = {
+  jan: 0,
+  januari: 0,
+  feb: 1,
+  februari: 1,
+  mar: 2,
+  maret: 2,
+  apr: 3,
+  april: 3,
+  mei: 4,
+  jun: 5,
+  juni: 5,
+  jul: 6,
+  juli: 6,
+  agu: 7,
+  agustus: 7,
+  sep: 8,
+  september: 8,
+  okt: 9,
+  oktober: 9,
+  nov: 10,
+  november: 10,
+  des: 11,
+  desember: 11,
+};
+
+function parseTanggalIndonesia(raw: string): Date | null {
+  const clean = raw.replace(/\s+/g, ' ').trim();
+  const numeric = clean.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (numeric) return new Date(Number(numeric[3]), Number(numeric[2]) - 1, Number(numeric[1]));
+
+  const textDate = clean.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/);
+  if (!textDate) return null;
+
+  const month = bulanIndonesia[textDate[2].toLowerCase()];
+  if (month === undefined) return null;
+  return new Date(Number(textDate[3]), month, Number(textDate[1]));
+}
+
 export function parseTanggalRange(tanggalStr: string): { berangkat: string; pulang: string; lamaHari: number } {
-  // Format: "03-03-2026 s/d 03-03-2026" atau "03-03-2026 s/d 05-03-2026"
   const clean = tanggalStr.replace(/\s+/g, ' ').trim();
-  const parts = clean.split('s/d');
-  
-  if (parts.length === 2) {
-    const berangkat = parts[0].trim();
-    const pulang = parts[1].trim();
-    
-    try {
-      const d1 = new Date(berangkat.split('-').reverse().join('-'));
-      const d2 = new Date(pulang.split('-').reverse().join('-'));
-      const diffTime = Math.abs(d2.getTime() - d1.getTime());
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
-      return { berangkat, pulang, lamaHari: diffDays };
-    } catch {
-      return { berangkat, pulang, lamaHari: 1 };
-    }
-  }
-  
-  return { berangkat: clean, pulang: clean, lamaHari: 1 };
+  if (!clean) return { berangkat: '', pulang: '', lamaHari: 1 };
+
+  const parts = clean.split(/\s+s\/d\s+/i);
+  const berangkat = parts[0].trim();
+  const pulang = (parts[1] || parts[0]).trim();
+  const d1 = parseTanggalIndonesia(berangkat);
+  const d2 = parseTanggalIndonesia(pulang);
+
+  if (!d1 || !d2) return { berangkat, pulang, lamaHari: 1 };
+
+  const diffTime = Math.abs(d2.getTime() - d1.getTime());
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+  return { berangkat, pulang, lamaHari: diffDays || 1 };
 }
