@@ -191,6 +191,16 @@ function geotagDate(geotag: GeotagEntry) {
   return normalizeDateValue(geotag.hariTanggal);
 }
 
+function geotagPlaceKey(geotag: GeotagEntry) {
+  return normalizeText(geotag.lokasiTagging || geotag.wilayahTagging);
+}
+
+function isDifferentPlace(a: GeotagEntry, b: GeotagEntry) {
+  const aPlace = geotagPlaceKey(a);
+  const bPlace = geotagPlaceKey(b);
+  return aPlace && bPlace && aPlace !== bPlace;
+}
+
 function sortByTime(geotags: GeotagEntry[]) {
   return [...geotags].sort((a, b) => timeToMinutes(a.waktuTagging) - timeToMinutes(b.waktuTagging));
 }
@@ -203,6 +213,26 @@ function selectByRule(
 ) {
   const candidates = sortByTime(geotags.filter((geotag) => geotagDate(geotag) === date && matcher(geotag)));
   return mode === 'earliest' ? candidates[0] : candidates.at(-1);
+}
+
+function selectPangkalpinangDifferentPlace(
+  geotags: GeotagEntry[],
+  date: string,
+  anchor: GeotagEntry | undefined,
+  mode: 'after' | 'before',
+) {
+  if (!anchor) return undefined;
+
+  const anchorTime = timeToMinutes(anchor.waktuTagging);
+  const candidates = sortByTime(
+    geotags.filter((geotag) => {
+      const minutes = timeToMinutes(geotag.waktuTagging);
+      const validOrder = mode === 'after' ? minutes > anchorTime : minutes < anchorTime;
+      return geotagDate(geotag) === date && isPangkalpinang(geotag) && validOrder && isDifferentPlace(geotag, anchor);
+    }),
+  );
+
+  return mode === 'after' ? candidates[0] : candidates.at(-1);
 }
 
 function issue(key: GeotagPointKey, expectedDate: string, expectedLocation: string, kind: 'missing' | 'mismatch'): GeotagRuleIssue {
@@ -244,11 +274,18 @@ export function selectRequiredGeotagPoints(
 ): GeotagRuleResult {
   const { startDate, endDate } = parseActivityDateRange(tanggalKegiatan);
   const tujuanResolved = canonicalFromText(tujuan) || inferDestinationFromGeotags(geotags, tanggalKegiatan);
+  const isPangkalpinangDestination = canonicalFromText(tujuanResolved) === 'Kota Pangkalpinang';
+  const start = selectByRule(geotags, startDate, isPangkalpinang, 'earliest');
+  const end = selectByRule(geotags, endDate, isPangkalpinang, 'latest');
   const points: SelectedGeotagPoints = {
-    start: selectByRule(geotags, startDate, isPangkalpinang, 'earliest'),
-    clockIn: selectByRule(geotags, startDate, (geotag) => isDestination(geotag, tujuanResolved), 'earliest'),
-    clockOut: selectByRule(geotags, endDate, (geotag) => isDestination(geotag, tujuanResolved), 'latest'),
-    end: selectByRule(geotags, endDate, isPangkalpinang, 'latest'),
+    start,
+    clockIn: isPangkalpinangDestination
+      ? selectPangkalpinangDifferentPlace(geotags, startDate, start, 'after')
+      : selectByRule(geotags, startDate, (geotag) => isDestination(geotag, tujuanResolved), 'earliest'),
+    clockOut: isPangkalpinangDestination
+      ? selectPangkalpinangDifferentPlace(geotags, endDate, end, 'before')
+      : selectByRule(geotags, endDate, (geotag) => isDestination(geotag, tujuanResolved), 'latest'),
+    end,
   };
 
   const issues: GeotagRuleIssue[] = [];
