@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ClipboardCheck, Database, FileText, RefreshCw, Save } from 'lucide-react';
+import type { FormEvent } from 'react';
+import { ClipboardCheck, Database, FileText, LockKeyhole, LogOut, RefreshCw, Save } from 'lucide-react';
 import './App.css';
 import { accountKindLabel, budgetAccounts, findBudgetAccount, type BudgetAccount } from './data/perjadinAccounts';
 import { getUangHarian, parseTanggalRange } from './data/sbmData';
@@ -49,6 +50,11 @@ type Row = {
 type AccountUsage = { pagu: number; realisasi: number; komitmen: number; saldo: number };
 
 const SPREADSHEET_ID = '1fkXASbZbnPCZeW2FSxteE-oOnacVuJRCxQ8zWOgPRh8';
+const DEFAULT_WEBAPP_URL =
+  'https://script.google.com/macros/s/AKfycbze0ldW6vfwgiIEHg62XGSHymOdryCJBZfqifM4IZPos-hmqMi7f4qIotDZ45qHbgKh/exec';
+const ADMIN_PASSWORD = '636722';
+const ENDPOINT_STORAGE_KEY = 'eperjadin_webapp_url';
+const AUTH_STORAGE_KEY = 'eperjadin_manager_auth';
 
 const rupiah = (n: number) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(n || 0);
@@ -209,39 +215,22 @@ function App() {
   const [tujuan, setTujuan] = useState('');
   const [kodeAkun, setKodeAkun] = useState(budgetAccounts[0].kode);
   const [statusPJ, setStatusPJ] = useState<StatusPJ>('Belum Lengkap');
-  const [endpoint, setEndpoint] = useState(() => localStorage.getItem('eperjadin_webapp_url') || '');
+  const [endpoint, setEndpoint] = useState(DEFAULT_WEBAPP_URL);
   const [accounts, setAccounts] = useState<BudgetAccount[]>(budgetAccounts);
   const [rows, setRows] = useState<Row[]>([]);
   const [message, setMessage] = useState('');
+  const [isAuthenticated, setIsAuthenticated] = useState(() => sessionStorage.getItem(AUTH_STORAGE_KEY) === 'true');
+  const [password, setPassword] = useState('');
+  const [loginMessage, setLoginMessage] = useState('');
 
   const parsedPreview = useMemo(() => parsePerjadinClipboard(raw), [raw]);
   const parsedAccountCode = parsedPreview?.kodeAkun && findBudgetAccount(parsedPreview.kodeAkun) ? parsedPreview.kodeAkun : '';
   const usageByAccount = useMemo(() => calculateUsage(accounts, rows), [accounts, rows]);
 
   useEffect(() => {
-    const savedUrl = localStorage.getItem('eperjadin_webapp_url') || '';
-    if (!savedUrl) return;
-
-    async function loadInitialRemote() {
-      try {
-        const res = await fetch(savedUrl, { method: 'GET' });
-        const payload = await res.json();
-        if (!payload.success) return;
-
-        const nextRows = Array.isArray(payload.data) ? payload.data.map(rowFromSheet).reverse() : [];
-        const nextAccounts = Array.isArray(payload.akun)
-          ? (payload.akun.map(accountFromSheet).filter(Boolean) as BudgetAccount[])
-          : [];
-
-        setRows(nextRows);
-        if (nextAccounts.length) setAccounts(nextAccounts);
-      } catch {
-        setMessage('Gagal memuat database Google Sheets. Cek URL Web App, izin deploy, dan SPREADSHEET_ID Apps Script.');
-      }
-    }
-
-    void loadInitialRemote();
-  }, []);
+    if (!isAuthenticated) return;
+    void loadRemoteDatabase(endpoint.trim() || DEFAULT_WEBAPP_URL, false);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (parsedAccountCode) setKodeAkun(parsedAccountCode);
@@ -254,7 +243,8 @@ function App() {
     }
 
     try {
-      localStorage.setItem('eperjadin_webapp_url', url);
+      localStorage.setItem(ENDPOINT_STORAGE_KEY, url);
+      setEndpoint(url);
       const res = await fetch(url, { method: 'GET' });
       const payload = await res.json();
       if (!payload.success) throw new Error(payload.message || 'Response Google Sheets tidak valid.');
@@ -418,7 +408,7 @@ function App() {
       return;
     }
 
-    localStorage.setItem('eperjadin_webapp_url', endpoint.trim());
+    localStorage.setItem(ENDPOINT_STORAGE_KEY, endpoint.trim());
     try {
       const res = await fetch(endpoint.trim(), {
         method: 'POST',
@@ -436,6 +426,63 @@ function App() {
   const previewAccount = parsedPreview?.kodeAkun ? findBudgetAccount(parsedPreview.kodeAkun) : undefined;
   const selectedAccount = previewAccount || accounts.find((item) => item.kode === kodeAkun) || accounts[0];
 
+  function login(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (password !== ADMIN_PASSWORD) {
+      setLoginMessage('Password admin tidak sesuai.');
+      return;
+    }
+
+    sessionStorage.setItem(AUTH_STORAGE_KEY, 'true');
+    setIsAuthenticated(true);
+    setPassword('');
+    setLoginMessage('');
+  }
+
+  function logout() {
+    sessionStorage.removeItem(AUTH_STORAGE_KEY);
+    setIsAuthenticated(false);
+    setPassword('');
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-zinc-100 px-5 py-10 text-zinc-950">
+        <section className="w-full max-w-sm rounded-lg border bg-white p-5 shadow-sm">
+          <div className="mb-5 flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-blue-700 text-white">
+              <LockKeyhole className="h-5 w-5" />
+            </div>
+            <div>
+              <h1 className="text-lg font-semibold">ePerjadin Manager</h1>
+              <p className="text-sm text-zinc-500">Login admin untuk memuat dashboard.</p>
+            </div>
+          </div>
+          <form onSubmit={login} className="space-y-3">
+            <label className="block text-sm font-medium text-zinc-700" htmlFor="admin-password">
+              Password Admin
+            </label>
+            <input
+              id="admin-password"
+              className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoFocus
+            />
+            {loginMessage && <p className="rounded-md border border-red-200 bg-red-50 p-2 text-sm text-red-700">{loginMessage}</p>}
+            <button
+              type="submit"
+              className="inline-flex w-full items-center justify-center rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white"
+            >
+              Masuk
+            </button>
+          </form>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-zinc-100 text-zinc-950">
       <section className="border-b bg-white px-5 py-4">
@@ -444,14 +491,24 @@ function App() {
             <h1 className="text-xl font-semibold">Monitoring Perjadin PPK</h1>
             <p className="text-sm text-zinc-500">Persetujuan, pertanggungjawaban, geotagging, dan saldo akun DIPA.</p>
           </div>
-          <a
-            className="text-sm font-medium text-blue-700 underline-offset-4 hover:underline"
-            href={`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/edit`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            Google Sheet
-          </a>
+          <div className="flex items-center gap-3">
+            <a
+              className="text-sm font-medium text-blue-700 underline-offset-4 hover:underline"
+              href={`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/edit`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Google Sheet
+            </a>
+            <button
+              type="button"
+              onClick={logout}
+              className="inline-flex items-center justify-center gap-2 rounded-md border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700"
+            >
+              <LogOut className="h-4 w-4" />
+              Keluar
+            </button>
+          </div>
         </div>
       </section>
 
