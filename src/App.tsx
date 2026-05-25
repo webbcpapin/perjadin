@@ -67,6 +67,42 @@ function formatPoint(point?: { hariTanggal: string; waktuTagging: string; wilaya
   return `${point.hariTanggal} ${point.waktuTagging} ${point.wilayahTagging}`;
 }
 
+function isProblemGeotag(status: string) {
+  return ['Tidak Lengkap', 'Tidak Sesuai', 'Perlu Surat Pernyataan', 'Belum Lengkap', 'Sebagian'].includes(status);
+}
+
+function fallbackGeotagIssues(row: Row): GeotagIssue[] {
+  if (row.geotagIssues.length > 0) return row.geotagIssues;
+  if (!isProblemGeotag(row.statusGeotag)) return [];
+
+  const expected = {
+    start: { label: 'START', expectedLocation: 'Pangkalpinang', value: row.start },
+    clockIn: { label: 'CLOCK IN', expectedLocation: row.tujuan || 'Tujuan perjalanan dinas', value: row.clockIn },
+    clockOut: { label: 'CLOCK OUT', expectedLocation: row.tujuan || 'Tujuan perjalanan dinas', value: row.clockOut },
+    end: { label: 'END', expectedLocation: 'Pangkalpinang', value: row.end },
+  };
+
+  const missingIssues = Object.values(expected)
+    .filter((item) => !item.value)
+    .map((item) => ({
+      label: item.label,
+      expectedDate: row.tanggalKegiatan,
+      expectedLocation: item.expectedLocation,
+      message: `${item.label} tidak ditemukan pada data geotag yang tersimpan.`,
+    }));
+
+  if (missingIssues.length > 0) return missingIssues;
+
+  return [
+    {
+      label: 'GEOTAG',
+      expectedDate: row.tanggalKegiatan,
+      expectedLocation: row.tujuan || 'Lokasi perjalanan dinas',
+      message: `Status geotag ${row.statusGeotag}. Perlu surat pernyataan geotag.`,
+    },
+  ];
+}
+
 function readCell(source: Record<string, unknown>, names: string[]) {
   for (const name of names) {
     const value = source[name];
@@ -354,14 +390,15 @@ function App() {
     };
   }
 
-  function generateGeotagStatement() {
-    const row = buildRow();
+  function generateGeotagStatement(rowSource?: Row) {
+    const row = rowSource || buildRow();
     if (!row) {
       setMessage('Data tidak terbaca. Paste detail pertanggungjawaban dulu sebelum membuat surat geotag.');
       return;
     }
 
-    if (row.geotagIssues.length === 0) {
+    const issues = fallbackGeotagIssues(row);
+    if (issues.length === 0) {
       setMessage('Geotag sudah lengkap sesuai kaidah. Surat pernyataan tidak wajib dibuat.');
       return;
     }
@@ -377,7 +414,7 @@ function App() {
       clockIn: row.clockIn || geotagPointLabel(),
       clockOut: row.clockOut || geotagPointLabel(),
       end: row.end || geotagPointLabel(),
-      issues: row.geotagIssues,
+      issues,
     });
 
     const safeName = (row.namaPegawai || row.idKegiatan || 'perjadin').replace(/[^a-z0-9-]+/gi, '-');
@@ -584,14 +621,6 @@ function App() {
                 Simpan
               </button>
             </div>
-            <button
-              type="button"
-              onClick={generateGeotagStatement}
-              className="mt-3 inline-flex items-center justify-center gap-2 rounded-md border border-amber-700 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800"
-            >
-              <FileText className="h-4 w-4" />
-              Buat Surat Pernyataan Geotag
-            </button>
             {message && <p className="mt-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">{message}</p>}
           </section>
 
@@ -681,21 +710,39 @@ function App() {
                     </td>
                   </tr>
                 ) : (
-                  rows.map((row) => (
-                    <tr key={rowKey(row)} className="border-b hover:bg-zinc-50">
-                      <td className="whitespace-nowrap p-2">{row.tahap}</td>
-                      <td className="p-2 font-mono">{row.idKegiatan}</td>
-                      <td className="min-w-80 p-2">{row.namaKegiatan}</td>
-                      <td className="whitespace-nowrap p-2">{row.nomorST}</td>
-                      <td className="whitespace-nowrap p-2">{row.nka || row.nomorKegiatan}</td>
-                      <td className="whitespace-nowrap p-2">{row.tanggalKegiatan}</td>
-                      <td className="whitespace-nowrap p-2">{row.namaPegawai}</td>
-                      <td className="whitespace-nowrap p-2">{row.tahap === 'Persetujuan' ? row.statusPersetujuan || 'Disetujui' : row.statusPJ}</td>
-                      <td className="whitespace-nowrap p-2">{row.statusGeotag}</td>
-                      <td className="whitespace-nowrap p-2 text-right">{rupiah(row.nilaiRiil)}</td>
-                      <td className="min-w-80 p-2">{formatAccountName(accounts.find((account) => account.kode === row.kodeAkun)) || row.kodeAkun}</td>
-                    </tr>
-                  ))
+                  rows.map((row) => {
+                    const canGenerateStatement = isProblemGeotag(row.statusGeotag);
+
+                    return (
+                      <tr key={rowKey(row)} className="border-b hover:bg-zinc-50">
+                        <td className="whitespace-nowrap p-2">{row.tahap}</td>
+                        <td className="p-2 font-mono">{row.idKegiatan}</td>
+                        <td className="min-w-80 p-2">{row.namaKegiatan}</td>
+                        <td className="whitespace-nowrap p-2">{row.nomorST}</td>
+                        <td className="whitespace-nowrap p-2">{row.nka || row.nomorKegiatan}</td>
+                        <td className="whitespace-nowrap p-2">{row.tanggalKegiatan}</td>
+                        <td className="whitespace-nowrap p-2">{row.namaPegawai}</td>
+                        <td className="whitespace-nowrap p-2">{row.tahap === 'Persetujuan' ? row.statusPersetujuan || 'Disetujui' : row.statusPJ}</td>
+                        <td className="whitespace-nowrap p-2">
+                          {canGenerateStatement ? (
+                            <button
+                              type="button"
+                              onClick={() => generateGeotagStatement(row)}
+                              className="inline-flex items-center justify-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                              title="Buat surat pernyataan geotag"
+                            >
+                              <FileText className="h-3.5 w-3.5" />
+                              {row.statusGeotag}
+                            </button>
+                          ) : (
+                            row.statusGeotag
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap p-2 text-right">{rupiah(row.nilaiRiil)}</td>
+                        <td className="min-w-80 p-2">{formatAccountName(accounts.find((account) => account.kode === row.kodeAkun)) || row.kodeAkun}</td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
