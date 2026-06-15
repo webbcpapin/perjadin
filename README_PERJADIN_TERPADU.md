@@ -38,7 +38,15 @@ Paste isi `Code.gs` ke Apps Script yang terhubung dengan spreadsheet, lalu deplo
 - Execute as: Me
 - Who has access: Anyone
 
+Sebelum deploy, buat PIN bersama untuk pengguna internal. Jangan simpan PIN mentah di source code. Di Apps Script, ubah nilai `pin` pada fungsi `generatePinHashForSetup`, jalankan fungsi itu, lalu copy hasil hash dari **Execution log**.
+
+Buka **Project Settings > Script Properties** lalu tambahkan:
+
+- Property: `E_PERJADIN_PIN_HASH`
+- Value: hasil SHA-256 dari PIN akses
+
 URL `/exec` hasil deploy dimasukkan ke field URL Apps Script Web App di aplikasi.
+Masukkan PIN yang sama pada field PIN Akses. Endpoint akan menolak `GET` dan `POST` bila PIN tidak cocok.
 
 ## Cara Rekap
 
@@ -46,7 +54,14 @@ URL `/exec` hasil deploy dimasukkan ke field URL Apps Script Web App di aplikasi
 - Jika sudah ada baris `Pertanggungjawaban` untuk ID/ST yang sama, nilai pertanggungjawaban menggantikan komitmen persetujuan agar tidak dobel.
 - Status PJ `Belum Lengkap` dan `Lengkap` dihitung sebagai komitmen.
 - Status PJ `Disetujui` dihitung sebagai realisasi.
-- Primary key upsert: `Tahap Data + ID Kegiatan + Nomor ST + Nama Pegawai/Nomor Kegiatan`.
+- Primary key upsert: `Tahap Data + ID Kegiatan + Nomor ST + Nama Pegawai/Nomor Kegiatan`, dinormalisasi lowercase, trim, spasi ganda dirapikan, dan diberi hash stabil.
+
+## Perbaikan Operasional
+
+- Login frontend tidak lagi memakai password hardcoded. PIN akses divalidasi oleh Apps Script menggunakan hash di Script Properties.
+- Simpan data wajib lolos checklist: ID kegiatan, nomor ST, tanggal, pegawai, akun, nilai, dan catatan bila geotag bermasalah.
+- Baris monitoring bisa diedit dan dihapus dari UI, lalu disinkronkan ke Google Sheets.
+- Belitung dan Belitung Timur dipisahkan dari daftar Pulau Bangka agar tarif perjalanan tidak salah kategori.
 
 ## Menjalankan Frontend
 

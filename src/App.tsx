@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
-import { ClipboardCheck, Database, FileText, LockKeyhole, LogOut, RefreshCw, Save } from 'lucide-react';
+import { ClipboardCheck, Database, FileText, LockKeyhole, LogOut, Pencil, RefreshCw, Save, Trash2, X } from 'lucide-react';
 import './App.css';
 import { accountKindLabel, budgetAccounts, findBudgetAccount, type BudgetAccount } from './data/perjadinAccounts';
 import { getUangHarian, parseTanggalRange } from './data/sbmData';
@@ -45,16 +45,18 @@ type Row = {
   tanggalInput: string;
   detailGeotag: string;
   geotagIssues: GeotagIssue[];
+  keterangan: string;
 };
 
 type AccountUsage = { pagu: number; realisasi: number; komitmen: number; saldo: number };
+type ValidationItem = { label: string; ok: boolean; message: string };
 
 const SPREADSHEET_ID = '1fkXASbZbnPCZeW2FSxteE-oOnacVuJRCxQ8zWOgPRh8';
 const DEFAULT_WEBAPP_URL =
-  'https://script.google.com/macros/s/AKfycbze0ldW6vfwgiIEHg62XGSHymOdryCJBZfqifM4IZPos-hmqMi7f4qIotDZ45qHbgKh/exec';
-const ADMIN_PASSWORD = '636722';
+  'https://script.google.com/macros/s/AKfycbwstpaDGkYRRpcjduBfKXjczHyjyfuULboKAd7xcTFY7y0TDpzfp9qVOn8R4pvlrcQp/exec';
 const ENDPOINT_STORAGE_KEY = 'eperjadin_webapp_url';
 const AUTH_STORAGE_KEY = 'eperjadin_manager_auth';
+const ACCESS_CODE_STORAGE_KEY = 'eperjadin_access_code';
 
 const rupiah = (n: number) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(n || 0);
@@ -155,6 +157,7 @@ function rowFromSheet(item: Record<string, unknown>): Row {
     tanggalInput: readCell(item, ['Tanggal Input']),
     detailGeotag: readCell(item, ['Detail Geotag']),
     geotagIssues: [],
+    keterangan: readCell(item, ['Keterangan', 'Catatan']),
   };
 }
 
@@ -181,9 +184,27 @@ function accountFromSheet(item: Record<string, unknown>): BudgetAccount | null {
   };
 }
 
+function normalizeKeyPart(value?: string | number) {
+  return String(value || '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/[^\w./-]+/g, '');
+}
+
+function stableHash(value: string) {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(36);
+}
+
 function rowKey(row: Row) {
   const pegawaiAtauKegiatan = row.namaPegawai || row.nomorKegiatan || row.nka || 'kegiatan';
-  return `${row.tahap}|${row.idKegiatan}|${row.nomorST}|${pegawaiAtauKegiatan}`;
+  const parts = [row.tahap, row.idKegiatan, row.nomorST, pegawaiAtauKegiatan].map(normalizeKeyPart);
+  const normalized = parts.join('|');
+  return `${normalized}|${stableHash(normalized)}`;
 }
 
 function activityKey(row: Row) {
@@ -203,6 +224,37 @@ function formatAccountOption(account: BudgetAccount) {
 function formatAccountName(account?: BudgetAccount) {
   if (!account) return '';
   return `${account.akunBelanja} ${accountKindLabel(account.jenis)} - ${account.roLabel} - ${account.uraian}`;
+}
+
+function requestUrl(url: string, accessCode: string) {
+  if (!accessCode.trim()) return url;
+  const nextUrl = new URL(url);
+  nextUrl.searchParams.set('accessCode', accessCode.trim());
+  return nextUrl.toString();
+}
+
+function validateRow(row: Row, accounts: BudgetAccount[]): ValidationItem[] {
+  const accountValid = !!row.kodeAkun && accounts.some((account) => account.kode === row.kodeAkun);
+  const hasValue = row.nilaiRiil > 0 || row.totalPengeluaranRiil > 0 || row.totalEstimasiBiaya > 0;
+  const geotagOk = !isProblemGeotag(row.statusGeotag) || row.keterangan.trim().length > 0;
+
+  return [
+    { label: 'ID Kegiatan', ok: !!row.idKegiatan.trim(), message: 'ID kegiatan wajib terbaca.' },
+    { label: 'Nomor ST', ok: !!row.nomorST.trim(), message: 'Nomor ST wajib terbaca.' },
+    { label: 'Tanggal', ok: !!row.tanggalKegiatan.trim(), message: 'Tanggal kegiatan wajib terbaca.' },
+    {
+      label: 'Pegawai',
+      ok: row.tahap === 'Persetujuan' || !!row.namaPegawai.trim(),
+      message: 'Nama pegawai wajib terbaca untuk pertanggungjawaban/pelaksanaan.',
+    },
+    { label: 'Akun', ok: accountValid, message: 'Kode akun harus ada di master akun.' },
+    { label: 'Nilai', ok: hasValue, message: 'Nilai estimasi atau riil tidak boleh nol.' },
+    {
+      label: 'Geotag',
+      ok: geotagOk,
+      message: 'Geotag bermasalah wajib diberi alasan/catatan sebelum simpan.',
+    },
+  ];
 }
 
 function calculateUsage(accounts: BudgetAccount[], rows: Row[]) {
@@ -256,8 +308,14 @@ function App() {
   const [rows, setRows] = useState<Row[]>([]);
   const [message, setMessage] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(() => sessionStorage.getItem(AUTH_STORAGE_KEY) === 'true');
-  const [password, setPassword] = useState('');
+  const [accessCode, setAccessCode] = useState(
+    () => localStorage.getItem(ACCESS_CODE_STORAGE_KEY) || localStorage.getItem('eperjadin_webapp_token') || '',
+  );
   const [loginMessage, setLoginMessage] = useState('');
+  const [geotagReason, setGeotagReason] = useState('');
+  const [validationItems, setValidationItems] = useState<ValidationItem[]>([]);
+  const [editingRow, setEditingRow] = useState<Row | null>(null);
+  const [editingRowKey, setEditingRowKey] = useState('');
 
   const parsedPreview = useMemo(() => parsePerjadinClipboard(raw), [raw]);
   const parsedAccountCode = parsedPreview?.kodeAkun && findBudgetAccount(parsedPreview.kodeAkun) ? parsedPreview.kodeAkun : '';
@@ -266,7 +324,7 @@ function App() {
   useEffect(() => {
     if (!isAuthenticated) return;
     void loadRemoteDatabase(endpoint.trim() || DEFAULT_WEBAPP_URL, false);
-  }, [isAuthenticated]);
+  }, [isAuthenticated, accessCode]);
 
   useEffect(() => {
     if (parsedAccountCode) setKodeAkun(parsedAccountCode);
@@ -281,7 +339,7 @@ function App() {
     try {
       localStorage.setItem(ENDPOINT_STORAGE_KEY, url);
       setEndpoint(url);
-      const res = await fetch(url, { method: 'GET' });
+      const res = await fetch(requestUrl(url, accessCode), { method: 'GET' });
       const payload = await res.json();
       if (!payload.success) throw new Error(payload.message || 'Response Google Sheets tidak valid.');
 
@@ -387,6 +445,7 @@ function App() {
       tanggalInput: today(),
       detailGeotag,
       geotagIssues: geotagRule.issues,
+      keterangan: geotagReason.trim(),
     };
   }
 
@@ -429,6 +488,14 @@ function App() {
       return;
     }
 
+    const nextValidation = validateRow(row, accounts);
+    setValidationItems(nextValidation);
+    const failed = nextValidation.filter((item) => !item.ok);
+    if (failed.length > 0) {
+      setMessage(`Data belum disimpan. Perbaiki validasi: ${failed.map((item) => item.label).join(', ')}.`);
+      return;
+    }
+
     setRows((prev) => {
       const key = rowKey(row);
       const index = prev.findIndex((item) => rowKey(item) === key);
@@ -449,14 +516,85 @@ function App() {
     try {
       const res = await fetch(endpoint.trim(), {
         method: 'POST',
-        body: JSON.stringify({ action: 'upsertPerjadin', row }),
+        body: JSON.stringify({ action: 'upsertPerjadin', row, accessCode }),
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       });
       const payload = await res.json();
+      if (!payload.success) throw new Error(payload.message || 'Gagal menyimpan ke Google Sheets.');
       setMessage(payload.message ? `Tersimpan ke Google Sheets: ${payload.message}` : 'Tersimpan ke Google Sheets.');
       await loadRemoteDatabase(endpoint.trim(), false);
     } catch {
       setMessage('Tersimpan lokal, tetapi gagal kirim ke Google Sheets.');
+    }
+  }
+
+  function updateEditingRow<K extends keyof Row>(key: K, value: Row[K]) {
+    setEditingRow((current) => (current ? { ...current, [key]: value } : current));
+  }
+
+  async function saveEditedRow() {
+    if (!editingRow) return;
+
+    const nextValidation = validateRow(editingRow, accounts);
+    setValidationItems(nextValidation);
+    const failed = nextValidation.filter((item) => !item.ok);
+    if (failed.length > 0) {
+      setMessage(`Edit belum disimpan. Perbaiki validasi: ${failed.map((item) => item.label).join(', ')}.`);
+      return;
+    }
+
+    setRows((prev) => prev.map((row) => (rowKey(row) === editingRowKey ? editingRow : row)));
+    setEditingRow(null);
+    setEditingRowKey('');
+
+    if (!endpoint.trim()) {
+      setMessage('Perubahan tersimpan lokal. Isi URL Web App jika ingin sinkron ke Google Sheets.');
+      return;
+    }
+
+    try {
+      const res = await fetch(endpoint.trim(), {
+        method: 'POST',
+        body: JSON.stringify({ action: 'upsertPerjadin', row: editingRow, previousKey: editingRowKey, accessCode }),
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      });
+      const payload = await res.json();
+      if (!payload.success) throw new Error(payload.message || 'Gagal menyimpan edit.');
+      setMessage(payload.message ? `Edit tersimpan ke Google Sheets: ${payload.message}` : 'Edit tersimpan ke Google Sheets.');
+      await loadRemoteDatabase(endpoint.trim(), false);
+    } catch {
+      setMessage('Edit tersimpan lokal, tetapi gagal kirim ke Google Sheets.');
+    }
+  }
+
+  async function deleteRow(row: Row) {
+    const confirmed = window.confirm(`Hapus data ${row.namaKegiatan || row.idKegiatan} - ${row.namaPegawai || row.nomorKegiatan}?`);
+    if (!confirmed) return;
+
+    setRows((prev) => prev.filter((item) => rowKey(item) !== rowKey(row)));
+    setEditingRow((current) => {
+      if (!current || rowKey(current) !== rowKey(row)) return current;
+      setEditingRowKey('');
+      return null;
+    });
+
+    if (!endpoint.trim()) {
+      setMessage('Data dihapus lokal. Isi URL Web App jika ingin sinkron ke Google Sheets.');
+      return;
+    }
+
+    try {
+      const res = await fetch(endpoint.trim(), {
+        method: 'POST',
+        body: JSON.stringify({ action: 'deletePerjadin', row, accessCode }),
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      });
+      const payload = await res.json();
+      if (!payload.success) throw new Error(payload.message || 'Gagal menghapus data.');
+      setMessage(payload.message ? `Data dihapus dari Google Sheets: ${payload.message}` : 'Data dihapus dari Google Sheets.');
+      await loadRemoteDatabase(endpoint.trim(), false);
+    } catch {
+      setMessage('Data dihapus lokal, tetapi gagal menghapus dari Google Sheets.');
     }
   }
 
@@ -465,21 +603,20 @@ function App() {
 
   function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (password !== ADMIN_PASSWORD) {
-      setLoginMessage('Password admin tidak sesuai.');
+    if (!accessCode.trim()) {
+      setLoginMessage('Masukkan PIN akses.');
       return;
     }
 
+    localStorage.setItem(ACCESS_CODE_STORAGE_KEY, accessCode.trim());
     sessionStorage.setItem(AUTH_STORAGE_KEY, 'true');
     setIsAuthenticated(true);
-    setPassword('');
     setLoginMessage('');
   }
 
   function logout() {
     sessionStorage.removeItem(AUTH_STORAGE_KEY);
     setIsAuthenticated(false);
-    setPassword('');
   }
 
   if (!isAuthenticated) {
@@ -496,15 +633,16 @@ function App() {
             </div>
           </div>
           <form onSubmit={login} className="space-y-3">
-            <label className="block text-sm font-medium text-zinc-700" htmlFor="admin-password">
-              Password Admin
+            <label className="block text-sm font-medium text-zinc-700" htmlFor="access-code">
+              PIN Akses
             </label>
             <input
-              id="admin-password"
+              id="access-code"
               className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
               type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              inputMode="numeric"
+              value={accessCode}
+              onChange={(event) => setAccessCode(event.target.value)}
               autoFocus
             />
             {loginMessage && <p className="rounded-md border border-red-200 bg-red-50 p-2 text-sm text-red-700">{loginMessage}</p>}
@@ -597,12 +735,27 @@ function App() {
                 ))}
               </select>
             </div>
-            <div className="mt-3 grid gap-3 md:grid-cols-[1fr_auto_auto]">
+            <textarea
+              className="mt-3 h-20 w-full rounded-md border border-zinc-300 p-3 text-sm outline-none focus:border-blue-500"
+              value={geotagReason}
+              onChange={(event) => setGeotagReason(event.target.value)}
+              placeholder="Catatan/alasan bila geotag tidak lengkap atau tidak sesuai."
+            />
+            <div className="mt-3 grid gap-3 md:grid-cols-[1fr_220px_auto_auto]">
               <input
                 className="rounded-md border border-zinc-300 px-3 py-2 text-xs outline-none focus:border-blue-500"
                 value={endpoint}
                 onChange={(event) => setEndpoint(event.target.value)}
                 placeholder="URL Apps Script Web App"
+              />
+              <input
+                className="rounded-md border border-zinc-300 px-3 py-2 text-xs outline-none focus:border-blue-500"
+                value={accessCode}
+                onChange={(event) => setAccessCode(event.target.value)}
+                onBlur={() => localStorage.setItem(ACCESS_CODE_STORAGE_KEY, accessCode.trim())}
+                placeholder="PIN akses"
+                type="password"
+                inputMode="numeric"
               />
               <button
                 type="button"
@@ -621,6 +774,16 @@ function App() {
                 Simpan
               </button>
             </div>
+            {validationItems.length > 0 && (
+              <div className="mt-3 grid gap-2 rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm md:grid-cols-2">
+                {validationItems.map((item) => (
+                  <div key={item.label} className={item.ok ? 'text-emerald-700' : 'text-red-700'}>
+                    <span className="font-medium">{item.ok ? 'OK' : 'Periksa'} {item.label}</span>
+                    <span className="text-zinc-500"> - {item.message}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             {message && <p className="mt-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">{message}</p>}
           </section>
 
@@ -689,13 +852,112 @@ function App() {
           </div>
         </section>
 
+        {editingRow && (
+          <section className="rounded-lg border border-blue-200 bg-white p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="font-semibold">Edit Data Monitoring</h2>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingRow(null);
+                  setEditingRowKey('');
+                }}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-zinc-300 text-zinc-700"
+                title="Tutup editor"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="grid gap-3 md:grid-cols-3">
+              <input
+                className="rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                value={editingRow.namaKegiatan}
+                onChange={(event) => updateEditingRow('namaKegiatan', event.target.value)}
+                placeholder="Nama kegiatan"
+              />
+              <input
+                className="rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                value={editingRow.nomorST}
+                onChange={(event) => updateEditingRow('nomorST', event.target.value)}
+                placeholder="Nomor ST"
+              />
+              <input
+                className="rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                value={editingRow.tanggalKegiatan}
+                onChange={(event) => updateEditingRow('tanggalKegiatan', event.target.value)}
+                placeholder="Tanggal kegiatan"
+              />
+              <input
+                className="rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                value={editingRow.namaPegawai}
+                onChange={(event) => updateEditingRow('namaPegawai', event.target.value)}
+                placeholder="Nama pegawai"
+              />
+              <input
+                className="rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                value={editingRow.tujuan}
+                onChange={(event) => updateEditingRow('tujuan', event.target.value)}
+                placeholder="Tujuan"
+              />
+              <select
+                className="rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                value={editingRow.statusPJ}
+                onChange={(event) => updateEditingRow('statusPJ', event.target.value as StatusPJ)}
+              >
+                <option>Belum Lengkap</option>
+                <option>Lengkap</option>
+                <option>Disetujui</option>
+              </select>
+              <select
+                className="rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                value={editingRow.kodeAkun}
+                onChange={(event) => updateEditingRow('kodeAkun', event.target.value)}
+              >
+                {accounts.map((account) => (
+                  <option key={account.kode} value={account.kode}>
+                    {formatAccountOption(account)}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                value={editingRow.nilaiRiil}
+                onChange={(event) => updateEditingRow('nilaiRiil', Number(event.target.value) || 0)}
+                placeholder="Nilai riil"
+                type="number"
+                min="0"
+              />
+              <input
+                className="rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                value={editingRow.statusGeotag}
+                onChange={(event) => updateEditingRow('statusGeotag', event.target.value)}
+                placeholder="Status geotag"
+              />
+            </div>
+            <textarea
+              className="mt-3 h-20 w-full rounded-md border border-zinc-300 p-3 text-sm"
+              value={editingRow.keterangan}
+              onChange={(event) => updateEditingRow('keterangan', event.target.value)}
+              placeholder="Catatan/keterangan"
+            />
+            <button
+              type="button"
+              onClick={saveEditedRow}
+              className="mt-3 inline-flex items-center justify-center gap-2 rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white"
+            >
+              <Save className="h-4 w-4" />
+              Simpan Edit
+            </button>
+          </section>
+        )}
+
         <section className="rounded-lg border bg-white p-4 shadow-sm">
           <h2 className="mb-3 font-semibold">Data Monitoring</h2>
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-xs">
               <thead className="bg-zinc-900 text-white">
                 <tr>
-                  {['Tahap', 'ID', 'Nama Kegiatan', 'Nomor ST', 'KPD/NKA', 'Tanggal', 'Pegawai', 'Status', 'Geotag', 'Nilai', 'Akun'].map((head) => (
+                  {['Tahap', 'ID', 'Nama Kegiatan', 'Nomor ST', 'KPD/NKA', 'Tanggal', 'Pegawai', 'Status', 'Geotag', 'Nilai', 'Akun', 'Aksi'].map((head) => (
                     <th key={head} className="whitespace-nowrap p-2 text-left font-medium">
                       {head}
                     </th>
@@ -705,7 +967,7 @@ function App() {
               <tbody>
                 {rows.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="p-6 text-center text-zinc-500">
+                    <td colSpan={12} className="p-6 text-center text-zinc-500">
                       Belum ada data.
                     </td>
                   </tr>
@@ -740,6 +1002,29 @@ function App() {
                         </td>
                         <td className="whitespace-nowrap p-2 text-right">{rupiah(row.nilaiRiil)}</td>
                         <td className="min-w-80 p-2">{formatAccountName(accounts.find((account) => account.kode === row.kodeAkun)) || row.kodeAkun}</td>
+                        <td className="whitespace-nowrap p-2">
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingRow(row);
+                                setEditingRowKey(rowKey(row));
+                              }}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-zinc-300 text-zinc-700 hover:bg-zinc-100"
+                              title="Edit baris"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => deleteRow(row)}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 text-red-700 hover:bg-red-50"
+                              title="Hapus baris"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </td>
                       </tr>
                     );
                   })

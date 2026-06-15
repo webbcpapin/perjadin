@@ -40,8 +40,10 @@ export const sbmUangHarian: Record<string, { luarKota: number; dalamKota: number
 };
 
 export const pulauBangkaKabupaten = [
-  'BANGKA', 'BANGKA BARAT', 'BANGKA TENGAH', 'BANGKA SELATAN', 'BELITUNG', 'BELITUNG TIMUR'
+  'PANGKALPINANG', 'PANGKAL PINANG', 'BANGKA', 'BANGKA BARAT', 'BANGKA TENGAH', 'BANGKA SELATAN'
 ];
+
+export const pulauBelitungKabupaten = ['BELITUNG', 'BELITUNG TIMUR'];
 
 export function getUangHarian(tujuan: string): {
   kategori: 'dalam_kota' | 'pulau_bangka' | 'luar_pulau_bangka';
@@ -79,7 +81,22 @@ export function getUangHarian(tujuan: string): {
     }
   }
 
-  // 3. Luar Pulau Bangka - match by provinsi
+  // 3. Pulau Belitung tetap Babel, tetapi bukan Pulau Bangka.
+  for (const kab of pulauBelitungKabupaten) {
+    if (tujuanUpper.includes(kab)) {
+      const uh60 = Math.round(sbmUangHarian['BANGKA BELITUNG'].luarKota * 0.6);
+      return {
+        kategori: 'luar_pulau_bangka',
+        uangHarian: uh60,
+        sbmLuarKota: sbmUangHarian['BANGKA BELITUNG'].luarKota,
+        sbm60Persen: uh60,
+        provinsi: 'BANGKA BELITUNG',
+        keterangan: `Pulau Belitung (${kab}): 60% x Rp ${sbmUangHarian['BANGKA BELITUNG'].luarKota.toLocaleString()} = Rp ${uh60.toLocaleString()}/hari`
+      };
+    }
+  }
+
+  // 4. Luar Pulau Bangka - match by provinsi
   for (const [prov, uh] of Object.entries(sbmUangHarian)) {
     if (tujuanUpper.includes(prov)) {
       const uh60 = Math.round(uh.luarKota * 0.6);

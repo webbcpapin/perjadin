@@ -32,7 +32,8 @@ const HEADERS_DATA = [
   'Kota Tujuan',
   'Jenis Pembayaran',
   'Total Estimasi Biaya',
-  'Total Uang Muka'
+  'Total Uang Muka',
+  'Keterangan'
 ];
 
 const HEADERS_AKUN = ['Kode Akun', 'Nama Akun', 'Pagu', 'Realisasi', 'Komitmen', 'Saldo'];
@@ -83,7 +84,9 @@ function sheet_(name, headers) {
   return sh;
 }
 
-function doGet() {
+function doGet(e) {
+  const auth = requireAccess_(e && e.parameter ? { accessCode: e.parameter.accessCode, token: e.parameter.token } : null);
+  if (!auth.success) return out_(auth);
   ensureAccounts_();
   refreshAkun_();
   const dataSheet = dataSheetForRead_();
@@ -100,7 +103,10 @@ function doGet() {
 function doPost(e) {
   try {
     const body = JSON.parse(e.postData.contents);
-    if (body.action === 'upsertPerjadin') return upsertPerjadin_(body.row);
+    const auth = requireAccess_(body);
+    if (!auth.success) return out_(auth);
+    if (body.action === 'upsertPerjadin') return upsertPerjadin_(body.row, body.previousKey || '');
+    if (body.action === 'deletePerjadin') return deletePerjadin_(body.row);
     if (body.action === 'saveAccounts') return saveAccounts_(body.accounts || []);
     return out_({ success: false, message: 'Action tidak dikenali' });
   } catch (err) {
@@ -108,21 +114,16 @@ function doPost(e) {
   }
 }
 
-function upsertPerjadin_(r) {
+function upsertPerjadin_(r, previousKey) {
   const sh = sheet_(DATA_SHEET_NAME, HEADERS_DATA);
   const headers = headerMap_(sh);
-  const key = [r.tahap || 'Pertanggungjawaban', r.idKegiatan, r.nomorST, r.namaPegawai || r.nomorKegiatan || r.nka].join('|');
+  const key = rowKey_(r);
   const values = sh.getDataRange().getValues();
   let target = -1;
 
   for (let i = 1; i < values.length; i++) {
-    const existingKey = [
-      values[i][headers['Tahap Data']] || 'Pertanggungjawaban',
-      values[i][headers['ID Kegiatan']],
-      values[i][headers['Nomor ST']],
-      values[i][headers['Nama Pegawai']] || values[i][headers['Nomor Kegiatan KPD']] || values[i][headers['NKA/Nomor Kegiatan']]
-    ].join('|');
-    if (existingKey === key) {
+    const existingKey = rowKeyFromSheetRow_(values[i], headers);
+    if (existingKey === key || (previousKey && existingKey === previousKey)) {
       target = i + 1;
       break;
     }
@@ -139,6 +140,23 @@ function upsertPerjadin_(r) {
 
   refreshAkun_();
   return out_({ success: true, message: target > 0 ? 'Updated' : 'Inserted' });
+}
+
+function deletePerjadin_(r) {
+  const sh = sheet_(DATA_SHEET_NAME, HEADERS_DATA);
+  const headers = headerMap_(sh);
+  const key = rowKey_(r);
+  const values = sh.getDataRange().getValues();
+
+  for (let i = 1; i < values.length; i++) {
+    if (rowKeyFromSheetRow_(values[i], headers) === key) {
+      sh.deleteRow(i + 1);
+      refreshAkun_();
+      return out_({ success: true, message: 'Deleted' });
+    }
+  }
+
+  return out_({ success: false, message: 'Data tidak ditemukan untuk dihapus' });
 }
 
 function saveAccounts_(accounts) {
@@ -203,7 +221,7 @@ function rowObject_(r) {
     'Total Estimasi Biaya': r.totalEstimasiBiaya || 0,
     'Total Uang Muka': r.totalUangMuka || r.uangMuka || 0,
     'BUKTI DUKUNG\nSURAT PERNYATAAN GEOTAG': buktiGeotag,
-    'Keterangan': ''
+    'Keterangan': r.keterangan || ''
   };
 }
 
@@ -331,6 +349,85 @@ function headerMap_(sh) {
     map[header] = index;
   });
   return map;
+}
+
+function requireAccess_(body) {
+  const props = PropertiesService.getScriptProperties();
+  const expectedPinHash = props.getProperty('E_PERJADIN_PIN_HASH');
+  const legacyToken = props.getProperty('E_PERJADIN_TOKEN');
+  if (!expectedPinHash && !legacyToken) {
+    return {
+      success: false,
+      message: 'PIN belum disetel. Isi Script Properties E_PERJADIN_PIN_HASH sebelum deploy.'
+    };
+  }
+
+  const received = body && (body.accessCode || body.token) ? String(body.accessCode || body.token) : '';
+  if (expectedPinHash && sha256Hex_(received) === expectedPinHash) {
+    return { success: true };
+  }
+
+  if (legacyToken && received === legacyToken) {
+    return { success: true };
+  }
+
+  return { success: false, message: 'PIN akses tidak valid' };
+}
+
+function sha256Hex_(value) {
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(value), Utilities.Charset.UTF_8);
+  return bytes.map(function(byte) {
+    const v = byte < 0 ? byte + 256 : byte;
+    return ('0' + v.toString(16)).slice(-2);
+  }).join('');
+}
+
+function generatePinHashForSetup() {
+  const pin = 'ganti-dengan-pin-anda';
+  Logger.log(sha256Hex_(pin));
+}
+
+function normalizeKeyPart_(value) {
+  return String(value || '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/[^\w.\/-]+/g, '');
+}
+
+function stableHash_(value) {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+function rowKey_(r) {
+  const pegawaiAtauKegiatan = r.namaPegawai || r.nomorKegiatan || r.nka || 'kegiatan';
+  const normalized = [
+    r.tahap || 'Pertanggungjawaban',
+    r.idKegiatan,
+    r.nomorST,
+    pegawaiAtauKegiatan
+  ].map(normalizeKeyPart_).join('|');
+  return normalized + '|' + stableHash_(normalized);
+}
+
+function rowKeyFromSheetRow_(row, headers) {
+  const pegawaiAtauKegiatan =
+    row[headers['Nama Pegawai']] ||
+    row[headers['Nomor Kegiatan KPD']] ||
+    row[headers['NKA/Nomor Kegiatan']] ||
+    row[headers['NKA / Nomor Kegiatan']] ||
+    'kegiatan';
+
+  return rowKey_({
+    tahap: row[headers['Tahap Data']] || 'Pertanggungjawaban',
+    idKegiatan: row[headers['ID Kegiatan']],
+    nomorST: row[headers['Nomor ST']],
+    namaPegawai: pegawaiAtauKegiatan
+  });
 }
 
 function out_(obj) {
