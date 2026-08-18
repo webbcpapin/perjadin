@@ -1,73 +1,49 @@
-# React + TypeScript + Vite
+# ePerjadin Manager
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Dashboard internal untuk merekam, memvalidasi, dan memonitor data perjalanan dinas KPPBC TMP C Pangkalpinang yang bersumber dari SATU Kemenkeu.
 
-Currently, two official plugins are available:
+## Komponen
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- Aplikasi React/Vite: dashboard monitoring, input detail manual, validasi geotag, perhitungan SBM, dan rekap akun.
+- `Code.gs`: API Google Apps Script untuk autentikasi PIN, upsert tunggal/batch, data monitoring, audit sinkronisasi, dan rekap anggaran.
+- `collector-extension`: ekstensi Chrome read-only untuk merekam seluruh halaman tabel SATU Kemenkeu menjadi JSON.
+- Google Sheet: `DATA_PERJADIN`, `AKUN_ANGGARAN`, dan `SINKRONISASI`.
 
-## React Compiler
+## Alur sinkronisasi data utuh
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+1. Login ke SATU Kemenkeu dan buka halaman daftar Perjadin.
+2. Jalankan Kolektor EPERJADIN pada setiap bagian/status, lalu pilih **Rekam semua halaman**.
+3. Salin JSON hasil kolektor.
+4. Pada ePerjadin Manager, buka panel **Sinkronisasi SATU Kemenkeu**, tempel JSON, dan periksa jumlah pusat serta jumlah yang terekam.
+5. Klik **Sinkronkan ke Google Sheet**. Apps Script melakukan upsert sehingga pengambilan ulang memperbarui data tanpa membuat duplikasi.
+6. Periksa tab `SINKRONISASI` untuk cakupan dan hasil setiap batch.
 
-## Expanding the ESLint configuration
+Pengambilan data SATU Kemenkeu bersifat read-only. Kolektor hanya membaca tabel dan mengoperasikan tombol pagination. Aksi persetujuan, pembatalan, penghapusan, dan perubahan transaksi tidak digunakan.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Menjalankan aplikasi
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm ci
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Verifikasi produksi:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run build
+npx eslint src/App.tsx src/components/SyncPanel.tsx
+node --check collector-extension/content-script.js
+node --check collector-extension/popup.js
 ```
+
+Push ke `main` akan menjalankan workflow GitHub Pages di `.github/workflows/pages.yml`.
+
+## Konfigurasi Apps Script
+
+1. Buka spreadsheet tujuan dan pilih **Extensions > Apps Script**.
+2. Ganti isi project dengan `Code.gs`.
+3. Atur Script Property `E_PERJADIN_PIN_HASH` sesuai petunjuk di `README_PERJADIN_TERPADU.md`.
+4. Deploy sebagai Web App dengan **Execute as: Me** dan akses sesuai kebijakan internal.
+5. Masukkan URL `/exec` dan PIN pada ePerjadin Manager.
+
+Dokumentasi operasional lebih lengkap tersedia di `README_PERJADIN_TERPADU.md` dan `collector-extension/README.md`.

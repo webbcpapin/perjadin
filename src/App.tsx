@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ClipboardCheck, Database, FileText, LockKeyhole, LogOut, Pencil, RefreshCw, Save, Trash2, X } from 'lucide-react';
 import './App.css';
@@ -8,8 +8,9 @@ import { parsePerjadinClipboard } from './utils/parser';
 import { createGeotagStatementDocx, downloadBlob } from './utils/docxGenerator';
 import { geotagPointLabel, inferDestinationFromGeotags, selectRequiredGeotagPoints } from './utils/geotagRules';
 import type { GeotagIssue } from './types';
+import { SyncPanel } from './components/SyncPanel';
 
-type Stage = 'Persetujuan' | 'Pertanggungjawaban' | 'Pelaksanaan';
+type Stage = 'Kegiatan' | 'Persetujuan' | 'Pertanggungjawaban' | 'Pelaksanaan';
 type StatusPJ = 'Belum Lengkap' | 'Lengkap' | 'Disetujui';
 
 type Row = {
@@ -46,6 +47,10 @@ type Row = {
   detailGeotag: string;
   geotagIssues: GeotagIssue[];
   keterangan: string;
+  jenisPerjadin: string;
+  sumberData: string;
+  waktuRekamSumber: string;
+  sourceRecordKey: string;
 };
 
 type AccountUsage = { pagu: number; realisasi: number; komitmen: number; saldo: number };
@@ -158,6 +163,10 @@ function rowFromSheet(item: Record<string, unknown>): Row {
     detailGeotag: readCell(item, ['Detail Geotag']),
     geotagIssues: [],
     keterangan: readCell(item, ['Keterangan', 'Catatan']),
+    jenisPerjadin: readCell(item, ['Jenis Perjadin']),
+    sumberData: readCell(item, ['Sumber Data']),
+    waktuRekamSumber: readCell(item, ['Waktu Rekam Sumber']),
+    sourceRecordKey: readCell(item, ['Kunci Sumber']),
   };
 }
 
@@ -224,13 +233,6 @@ function formatAccountOption(account: BudgetAccount) {
 function formatAccountName(account?: BudgetAccount) {
   if (!account) return '';
   return `${account.akunBelanja} ${accountKindLabel(account.jenis)} - ${account.roLabel} - ${account.uraian}`;
-}
-
-function requestUrl(url: string, accessCode: string) {
-  if (!accessCode.trim()) return url;
-  const nextUrl = new URL(url);
-  nextUrl.searchParams.set('accessCode', accessCode.trim());
-  return nextUrl.toString();
 }
 
 function validateRow(row: Row, accounts: BudgetAccount[]): ValidationItem[] {
@@ -322,15 +324,10 @@ function App() {
   const usageByAccount = useMemo(() => calculateUsage(accounts, rows), [accounts, rows]);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
-    void loadRemoteDatabase(endpoint.trim() || DEFAULT_WEBAPP_URL, false);
-  }, [isAuthenticated, accessCode]);
-
-  useEffect(() => {
     if (parsedAccountCode) setKodeAkun(parsedAccountCode);
   }, [parsedAccountCode]);
 
-  async function loadRemoteDatabase(url = endpoint.trim(), showMessage = true) {
+  const loadRemoteDatabase = useCallback(async (url = endpoint.trim(), showMessage = true) => {
     if (!url) {
       setMessage('Isi URL Apps Script Web App dulu.');
       return;
@@ -339,7 +336,11 @@ function App() {
     try {
       localStorage.setItem(ENDPOINT_STORAGE_KEY, url);
       setEndpoint(url);
-      const res = await fetch(requestUrl(url, accessCode), { method: 'GET' });
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: 'getDashboard', accessCode }),
+      });
       const payload = await res.json();
       if (!payload.success) throw new Error(payload.message || 'Response Google Sheets tidak valid.');
 
@@ -357,7 +358,12 @@ function App() {
     } catch {
       setMessage('Gagal memuat database Google Sheets. Cek URL Web App, izin deploy, dan SPREADSHEET_ID Apps Script.');
     }
-  }
+  }, [accessCode, endpoint]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    void loadRemoteDatabase(endpoint.trim() || DEFAULT_WEBAPP_URL, false);
+  }, [endpoint, isAuthenticated, loadRemoteDatabase]);
 
   const summary = useMemo(() => {
     const values = Object.values(usageByAccount);
@@ -371,7 +377,9 @@ function App() {
 
   const counts = useMemo(
     () => ({
+      kegiatan: rows.filter((row) => row.tahap === 'Kegiatan').length,
       persetujuan: rows.filter((row) => row.tahap === 'Persetujuan').length,
+      pelaksanaan: rows.filter((row) => row.tahap === 'Pelaksanaan').length,
       belumLengkap: rows.filter((row) => row.tahap === 'Pertanggungjawaban' && row.statusPJ === 'Belum Lengkap').length,
       lengkap: rows.filter((row) => row.tahap === 'Pertanggungjawaban' && row.statusPJ === 'Lengkap').length,
       disetujui: rows.filter((row) => row.tahap === 'Pertanggungjawaban' && row.statusPJ === 'Disetujui').length,
@@ -446,6 +454,10 @@ function App() {
       detailGeotag,
       geotagIssues: geotagRule.issues,
       keterangan: geotagReason.trim(),
+      jenisPerjadin: '',
+      sumberData: 'Input manual ePerjadin Manager',
+      waktuRekamSumber: new Date().toISOString(),
+      sourceRecordKey: '',
     };
   }
 
@@ -813,7 +825,9 @@ function App() {
                 Status Rekap
               </h2>
               <div className="grid grid-cols-2 gap-2 text-sm">
+                <MiniStat label="Kegiatan" value={counts.kegiatan} />
                 <MiniStat label="Persetujuan" value={counts.persetujuan} />
+                <MiniStat label="Pelaksanaan" value={counts.pelaksanaan} />
                 <MiniStat label="Belum Lengkap" value={counts.belumLengkap} />
                 <MiniStat label="Lengkap" value={counts.lengkap} />
                 <MiniStat label="Disetujui" value={counts.disetujui} />
@@ -821,6 +835,13 @@ function App() {
             </section>
           </aside>
         </div>
+
+        <SyncPanel
+          endpoint={endpoint}
+          accessCode={accessCode}
+          onReload={() => loadRemoteDatabase(endpoint.trim(), false)}
+          onMessage={setMessage}
+        />
 
         <section className="rounded-lg border bg-white p-4 shadow-sm">
           <h2 className="mb-3 font-semibold">Saldo per Akun</h2>

@@ -33,12 +33,33 @@ const HEADERS_DATA = [
   'Jenis Pembayaran',
   'Total Estimasi Biaya',
   'Total Uang Muka',
-  'Keterangan'
+  'Keterangan',
+  'Jenis Perjadin',
+  'Sumber Data',
+  'URL Sumber',
+  'Waktu Rekam Sumber',
+  'Batch Sinkronisasi',
+  'Kunci Sumber'
 ];
 
 const HEADERS_AKUN = ['Kode Akun', 'Nama Akun', 'Pagu', 'Realisasi', 'Komitmen', 'Saldo'];
+const HEADERS_SYNC = [
+  'Batch ID',
+  'Waktu Rekam Sumber',
+  'Waktu Impor',
+  'Sumber',
+  'Bagian',
+  'URL Sumber',
+  'Total di Pusat',
+  'Diterima',
+  'Baru',
+  'Diperbarui',
+  'Dilewati',
+  'Cakupan (%)'
+];
 const DATA_SHEET_NAME = 'DATA_PERJADIN';
 const ACCOUNT_SHEET_NAME = 'AKUN_ANGGARAN';
+const SYNC_SHEET_NAME = 'SINKRONISASI';
 
 const DEFAULT_ACCOUNTS = [
   ['636722.015.524111.01505CC.4787AEF.A000000001.00000.2.3051.2.000000.000000', '524111 Luar Kota - 4787.AEF - Sosialisasi dan Penyuluhan (Eksternal)', 3300000, 0, 0, 3300000],
@@ -87,6 +108,10 @@ function sheet_(name, headers) {
 function doGet(e) {
   const auth = requireAccess_(e && e.parameter ? { accessCode: e.parameter.accessCode, token: e.parameter.token } : null);
   if (!auth.success) return out_(auth);
+  return dashboardResponse_();
+}
+
+function dashboardResponse_() {
   ensureAccounts_();
   refreshAkun_();
   const dataSheet = dataSheetForRead_();
@@ -96,6 +121,7 @@ function doGet(e) {
     success: true,
     data: data,
     akun: akun,
+    sync: syncSummary_(),
     sourceSheet: dataSheet ? dataSheet.getName() : DATA_SHEET_NAME
   });
 }
@@ -105,7 +131,9 @@ function doPost(e) {
     const body = JSON.parse(e.postData.contents);
     const auth = requireAccess_(body);
     if (!auth.success) return out_(auth);
+    if (body.action === 'getDashboard') return dashboardResponse_();
     if (body.action === 'upsertPerjadin') return upsertPerjadin_(body.row, body.previousKey || '');
+    if (body.action === 'batchUpsertCollector') return batchUpsertCollector_(body.payload || {});
     if (body.action === 'deletePerjadin') return deletePerjadin_(body.row);
     if (body.action === 'saveAccounts') return saveAccounts_(body.accounts || []);
     return out_({ success: false, message: 'Action tidak dikenali' });
@@ -157,6 +185,230 @@ function deletePerjadin_(r) {
   }
 
   return out_({ success: false, message: 'Data tidak ditemukan untuk dihapus' });
+}
+
+function batchUpsertCollector_(payload) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+
+  try {
+    const records = Array.isArray(payload.records) ? payload.records : [];
+    if (records.length === 0) return out_({ success: false, message: 'Payload kolektor tidak berisi records.' });
+    if (records.length > 5000) return out_({ success: false, message: 'Maksimal 5.000 records per batch.' });
+
+    const sh = sheet_(DATA_SHEET_NAME, HEADERS_DATA);
+    const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+    const headerIndexes = headerMap_(sh);
+    const existingRows = sh.getLastRow() > 1
+      ? sh.getRange(2, 1, sh.getLastRow() - 1, headers.length).getValues()
+      : [];
+    const keyToIndex = {};
+    const sourceKeyColumn = headerIndexes['Kunci Sumber'];
+
+    existingRows.forEach(function(row, index) {
+      keyToIndex[rowKeyFromSheetRow_(row, headerIndexes)] = index;
+      if (sourceKeyColumn !== undefined && row[sourceKeyColumn]) keyToIndex['source:' + row[sourceKeyColumn]] = index;
+    });
+
+    const batchId = Utilities.getUuid();
+    const capturedAt = payload.capturedAt || new Date().toISOString();
+    const pageUrl = payload.pageUrl || '';
+    const source = payload.source || 'satu-kemenkeu';
+    const seen = {};
+    let inserted = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    records.forEach(function(record) {
+      const normalized = collectorRecordToRow_(record || {}, {
+        batchId: batchId,
+        capturedAt: capturedAt,
+        pageUrl: pageUrl,
+        source: source,
+        section: payload.section || ''
+      });
+
+      if (!normalized.idKegiatan || !normalized.namaKegiatan) {
+        skipped++;
+        return;
+      }
+
+      const sourceKey = normalized.sourceRecordKey || rowKey_(normalized);
+      if (seen[sourceKey]) {
+        skipped++;
+        return;
+      }
+      seen[sourceKey] = true;
+
+      const lookupKey = keyToIndex['source:' + sourceKey] !== undefined
+        ? 'source:' + sourceKey
+        : rowKey_(normalized);
+      const normalizedObject = rowObject_(normalized);
+      const rowValues = headers.map(function(header) {
+        return normalizedObject[header] !== undefined ? normalizedObject[header] : '';
+      });
+
+      if (keyToIndex[lookupKey] !== undefined) {
+        const rowIndex = keyToIndex[lookupKey];
+        existingRows[rowIndex] = mergeCollectorRow_(existingRows[rowIndex], rowValues, headers);
+        keyToIndex['source:' + sourceKey] = rowIndex;
+        updated++;
+      } else {
+        const rowIndex = existingRows.length;
+        existingRows.push(rowValues);
+        keyToIndex[rowKey_(normalized)] = rowIndex;
+        keyToIndex['source:' + sourceKey] = rowIndex;
+        inserted++;
+      }
+    });
+
+    if (existingRows.length > 0) {
+      sh.getRange(2, 1, existingRows.length, headers.length).setValues(existingRows);
+    }
+
+    appendSyncLog_({
+      batchId: batchId,
+      capturedAt: capturedAt,
+      source: source,
+      section: payload.section || inferCollectorSection_(records[0] || {}),
+      pageUrl: pageUrl,
+      totalSourceRows: Number(payload.totalSourceRows) || records.length,
+      received: records.length,
+      inserted: inserted,
+      updated: updated,
+      skipped: skipped
+    });
+    refreshAkun_();
+
+    return out_({
+      success: true,
+      batchId: batchId,
+      inserted: inserted,
+      updated: updated,
+      skipped: skipped,
+      received: records.length
+    });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function collectorRecordToRow_(record, context) {
+  const stage = normalizeCollectorStage_(record.stage || record.sourceSection || context.section);
+  const status = String(record.status || record.sourceStatus || '').trim();
+  const tanggal = record.tanggalKegiatan || joinDateRange_(record.tanggalMulai, record.tanggalSelesai);
+  const sourceRecordKey = record.sourceRecordKey || [
+    stage,
+    record.idKegiatan || '',
+    record.nomorST || '',
+    record.namaPegawai || record.nomorReferensi || 'kegiatan'
+  ].map(normalizeKeyPart_).join('|');
+
+  return {
+    tahap: stage,
+    idKegiatan: String(record.idKegiatan || '').trim(),
+    namaKegiatan: String(record.namaKegiatan || '').trim(),
+    nomorST: String(record.nomorST || '').trim(),
+    nomorKegiatan: String(record.nomorKegiatan || record.nomorReferensi || '').trim(),
+    nka: String(record.nka || '').trim(),
+    tanggalKegiatan: String(tanggal || '').trim(),
+    tujuan: String(record.tujuan || '').trim(),
+    kotaTujuan: String(record.kotaTujuan || '').trim(),
+    output: String(record.output || '').trim(),
+    jenisPembayaran: String(record.jenisPembayaran || '').trim(),
+    namaPegawai: String(record.namaPegawai || '').trim(),
+    lamaHari: Number(record.lamaHari) || 1,
+    uangHarianPerHari: Number(record.uangHarianPerHari) || 0,
+    totalUangHarian: Number(record.totalUangHarian) || 0,
+    uangMuka: Number(record.uangMuka) || 0,
+    totalEstimasiBiaya: Number(record.totalEstimasiBiaya) || 0,
+    totalPengeluaranRiil: Number(record.totalPengeluaranRiil) || 0,
+    kurangLebihBayar: Number(record.kurangLebihBayar) || 0,
+    statusPJ: stage === 'Pertanggungjawaban' ? normalizeResponsibilityStatus_(status) : 'Belum Lengkap',
+    statusPersetujuan: stage === 'Persetujuan' || stage === 'Kegiatan' ? status : '',
+    statusGeotag: String(record.statusGeotag || '').trim(),
+    start: String(record.start || '').trim(),
+    clockIn: String(record.clockIn || '').trim(),
+    clockOut: String(record.clockOut || '').trim(),
+    end: String(record.end || '').trim(),
+    volume: Number(record.volume) || 1,
+    nilaiRiil: Number(record.nilaiRiil || record.totalPengeluaranRiil || record.totalEstimasiBiaya) || 0,
+    kodeAkun: String(record.kodeAkun || '').trim(),
+    detailGeotag: String(record.detailGeotag || '').trim(),
+    tanggalInput: new Date(),
+    keterangan: String(record.keterangan || '').trim(),
+    jenisPerjadin: String(record.jenisPerjadin || '').trim(),
+    sumberData: context.source,
+    sourceUrl: record.sourceUrl || context.pageUrl,
+    waktuRekamSumber: record.capturedAt || context.capturedAt,
+    batchId: context.batchId,
+    sourceRecordKey: sourceRecordKey
+  };
+}
+
+function mergeCollectorRow_(current, incoming, headers) {
+  return headers.map(function(header, index) {
+    const next = incoming[index];
+    if (next === '' || next === null || next === undefined) return current[index];
+    if (header === 'Tanggal Input' && current[index]) return current[index];
+    return next;
+  });
+}
+
+function normalizeCollectorStage_(value) {
+  const text = String(value || '').toLowerCase();
+  if (text.indexOf('pertanggung') >= 0) return 'Pertanggungjawaban';
+  if (text.indexOf('persetujuan') >= 0) return 'Persetujuan';
+  if (text.indexOf('pelaksanaan') >= 0) return 'Pelaksanaan';
+  return 'Kegiatan';
+}
+
+function normalizeResponsibilityStatus_(value) {
+  const text = String(value || '').toLowerCase();
+  if (text.indexOf('belum') >= 0) return 'Belum Lengkap';
+  if (text.indexOf('disetujui') >= 0) return 'Disetujui';
+  if (text.indexOf('lengkap') >= 0 || text.indexOf('tervalidasi') >= 0) return 'Lengkap';
+  return 'Belum Lengkap';
+}
+
+function joinDateRange_(start, end) {
+  if (!start) return end || '';
+  if (!end || start === end) return start;
+  return start + ' s/d ' + end;
+}
+
+function inferCollectorSection_(record) {
+  return normalizeCollectorStage_(record.stage || record.sourceSection || 'Kegiatan');
+}
+
+function appendSyncLog_(entry) {
+  const sh = sheet_(SYNC_SHEET_NAME, HEADERS_SYNC);
+  const total = Number(entry.totalSourceRows) || 0;
+  const coverage = total > 0 ? Math.min(100, Math.round((Number(entry.received) || 0) / total * 10000) / 100) : 0;
+  sh.appendRow([
+    entry.batchId,
+    entry.capturedAt,
+    new Date(),
+    entry.source,
+    entry.section,
+    entry.pageUrl,
+    total,
+    entry.received,
+    entry.inserted,
+    entry.updated,
+    entry.skipped,
+    coverage
+  ]);
+}
+
+function syncSummary_() {
+  const sh = ss_().getSheetByName(SYNC_SHEET_NAME);
+  if (!sh || sh.getLastRow() <= 1) return { lastSync: null, batches: [] };
+  const rows = readExistingSheet_(sh);
+  return {
+    lastSync: rows.length > 0 ? rows[rows.length - 1] : null,
+    batches: rows.slice(Math.max(0, rows.length - 20)).reverse()
+  };
 }
 
 function saveAccounts_(accounts) {
@@ -221,7 +473,13 @@ function rowObject_(r) {
     'Total Estimasi Biaya': r.totalEstimasiBiaya || 0,
     'Total Uang Muka': r.totalUangMuka || r.uangMuka || 0,
     'BUKTI DUKUNG\nSURAT PERNYATAAN GEOTAG': buktiGeotag,
-    'Keterangan': r.keterangan || ''
+    'Keterangan': r.keterangan || '',
+    'Jenis Perjadin': r.jenisPerjadin || '',
+    'Sumber Data': r.sumberData || '',
+    'URL Sumber': r.sourceUrl || '',
+    'Waktu Rekam Sumber': r.waktuRekamSumber || '',
+    'Batch Sinkronisasi': r.batchId || '',
+    'Kunci Sumber': r.sourceRecordKey || ''
   };
 }
 

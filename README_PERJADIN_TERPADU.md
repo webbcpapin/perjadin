@@ -63,6 +63,37 @@ Masukkan PIN yang sama pada field PIN Akses. Endpoint akan menolak `GET` dan `PO
 - Baris monitoring bisa diedit dan dihapus dari UI, lalu disinkronkan ke Google Sheets.
 - Belitung dan Belitung Timur dipisahkan dari daftar Pulau Bangka agar tarif perjalanan tidak salah kategori.
 
+## Sinkronisasi Seluruh Data SATU Kemenkeu
+
+Karena aplikasi berjalan di GitHub Pages, aplikasi tidak dapat membaca sesi login `satu.kemenkeu.go.id` secara langsung. Kolektor Chrome di folder `collector-extension` menjadi jembatan read-only di browser pengguna:
+
+1. Kolektor membaca judul kolom dan isi baris tabel yang sedang aktif.
+2. Mode **Rekam semua halaman** kembali ke halaman pertama lalu menekan hanya tombol `Next page` sampai halaman terakhir.
+3. Setiap rekaman diberi `sourceRecordKey`, URL sumber, waktu pengambilan, bagian/status, dan teks sumber.
+4. JSON hasil kolektor ditempel ke panel **Sinkronisasi SATU Kemenkeu** pada aplikasi.
+5. Aplikasi mengirim satu batch ke Apps Script melalui aksi `batchUpsertCollector`.
+6. Apps Script melakukan upsert dan mencatat hasilnya pada tab `SINKRONISASI`.
+
+Jalankan kolektor pada seluruh bagian yang tersedia:
+
+- Kegiatan Utama dan Kegiatan Diarsipkan.
+- Persetujuan Baru Diusulkan dan Disetujui.
+- Pelaksanaan per tahun.
+- Pertanggungjawaban Belum Lengkap, Sudah Lengkap, dan Sudah Disetujui.
+
+Kolom sumber yang ditambahkan pada `DATA_PERJADIN`:
+
+- `Jenis Perjadin`
+- `Sumber Data`
+- `URL Sumber`
+- `Waktu Rekam Sumber`
+- `Batch Sinkronisasi`
+- `Kunci Sumber`
+
+Tab `SINKRONISASI` menyimpan total di pusat, jumlah diterima, jumlah baru, jumlah diperbarui, jumlah dilewati, dan persentase cakupan. Sinkronisasi dianggap lengkap jika jumlah diterima sama dengan total pusat untuk setiap bagian/status yang direkam.
+
+Data daftar merupakan indeks kegiatan. Data nilai, peserta, geotag, dan rincian pertanggungjawaban diperkaya melalui input detail pada aplikasi. Baris detail tidak ditimpa oleh data daftar yang kosong karena proses batch mempertahankan nilai lama ketika nilai baru kosong.
+
 ## Menjalankan Frontend
 
 ```bash

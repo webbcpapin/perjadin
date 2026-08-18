@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Kolektor EPERJADIN</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <span class="logo">E</span>
+        <div>
+          <h1>Kolektor EPERJADIN</h1>
+          <p>Read-only untuk SATU Kemenkeu</p>
+        </div>
+      </header>
+
+      <section class="notice">
+        Buka daftar Kegiatan, Persetujuan, Pelaksanaan, atau Pertanggungjawaban. Kolektor hanya membaca tabel dan tombol halaman berikutnya.
+      </section>
+
+      <div class="actions">
+        <button id="capture-page" type="button">Rekam halaman ini</button>
+        <button id="capture-all" type="button" class="primary">Rekam semua halaman</button>
+      </div>
+      <button id="capture-detail" type="button" class="detail-button">Rekam detail yang sedang terbuka</button>
+
+      <section class="status" aria-live="polite">
+        <strong id="status-title">Belum ada data</strong>
+        <span id="status-detail">Jalankan kolektor pada halaman daftar.</span>
+      </section>
+
+      <div class="actions">
+        <button id="copy-json" type="button" disabled>Salin JSON</button>
+        <button id="download-json" type="button" disabled>Unduh JSON</button>
+      </div>
+
+      <button id="clear-data" type="button" class="link-button">Hapus hasil kolektor</button>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

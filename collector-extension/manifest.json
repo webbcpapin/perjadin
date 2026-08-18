@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Kolektor EPERJADIN SATU Kemenkeu",
+  "version": "1.0.0",
+  "description": "Merekam daftar perjadin dari sesi SATU Kemenkeu ke JSON untuk diimpor melalui ePerjadin Manager.",
+  "permissions": ["activeTab", "clipboardWrite", "storage"],
+  "host_permissions": ["https://satu.kemenkeu.go.id/perjadin/*"],
+  "action": {
+    "default_title": "Kolektor EPERJADIN",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://satu.kemenkeu.go.id/perjadin/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
