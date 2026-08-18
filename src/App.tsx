@@ -355,8 +355,9 @@ function App() {
         const sourceSheet = payload.sourceSheet ? ` dari tab ${payload.sourceSheet}` : '';
         setMessage(`Database Google Sheets dimuat${sourceSheet}: ${nextRows.length} baris.`);
       }
-    } catch {
-      setMessage('Gagal memuat database Google Sheets. Cek URL Web App, izin deploy, dan SPREADSHEET_ID Apps Script.');
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : '';
+      setMessage(detail || 'Gagal memuat database Google Sheets. Cek URL Web App, izin deploy, dan SPREADSHEET_ID Apps Script.');
     }
   }, [accessCode, endpoint]);
 
@@ -613,17 +614,32 @@ function App() {
   const previewAccount = parsedPreview?.kodeAkun ? findBudgetAccount(parsedPreview.kodeAkun) : undefined;
   const selectedAccount = previewAccount || accounts.find((item) => item.kode === kodeAkun) || accounts[0];
 
-  function login(event: FormEvent<HTMLFormElement>) {
+  async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!accessCode.trim()) {
       setLoginMessage('Masukkan PIN akses.');
       return;
     }
 
-    localStorage.setItem(ACCESS_CODE_STORAGE_KEY, accessCode.trim());
-    sessionStorage.setItem(AUTH_STORAGE_KEY, 'true');
-    setIsAuthenticated(true);
-    setLoginMessage('');
+    const normalizedAccessCode = accessCode.trim();
+    setLoginMessage('Memeriksa PIN...');
+    try {
+      const res = await fetch(endpoint.trim() || DEFAULT_WEBAPP_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: 'getDashboard', accessCode: normalizedAccessCode }),
+      });
+      const payload = await res.json();
+      if (!payload.success) throw new Error(payload.message || 'PIN tidak dapat divalidasi.');
+
+      localStorage.setItem(ACCESS_CODE_STORAGE_KEY, normalizedAccessCode);
+      sessionStorage.setItem(AUTH_STORAGE_KEY, 'true');
+      setIsAuthenticated(true);
+      setLoginMessage('');
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : '';
+      setLoginMessage(detail || 'Gagal menghubungi Apps Script. Periksa koneksi dan URL Web App.');
+    }
   }
 
   function logout() {
