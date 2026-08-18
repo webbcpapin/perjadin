@@ -644,6 +644,10 @@ function App() {
 
   function logout() {
     sessionStorage.removeItem(AUTH_STORAGE_KEY);
+    localStorage.removeItem(ACCESS_CODE_STORAGE_KEY);
+    localStorage.removeItem('eperjadin_webapp_token');
+    setAccessCode('');
+    setLoginMessage('');
     setIsAuthenticated(false);
   }
 
