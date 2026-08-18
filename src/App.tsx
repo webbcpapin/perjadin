@@ -58,7 +58,7 @@ type ValidationItem = { label: string; ok: boolean; message: string };
 
 const SPREADSHEET_ID = '1fkXASbZbnPCZeW2FSxteE-oOnacVuJRCxQ8zWOgPRh8';
 const DEFAULT_WEBAPP_URL =
-  'https://script.google.com/macros/s/AKfycbwstpaDGkYRRpcjduBfKXjczHyjyfuULboKAd7xcTFY7y0TDpzfp9qVOn8R4pvlrcQp/exec';
+  'https://script.google.com/macros/s/AKfycbzyyQCjskwpdrqOCWUNg05QTEP8tIROgCnFaVLx6AMTPA04kJQzLUk2ZDm-w4rebnzp/exec';
 const ENDPOINT_STORAGE_KEY = 'eperjadin_webapp_url';
 const AUTH_STORAGE_KEY = 'eperjadin_manager_auth';
 const ACCESS_CODE_STORAGE_KEY = 'eperjadin_access_code';
