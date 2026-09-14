@@ -6,7 +6,8 @@ import { inferDestinationFromGeotags, selectRequiredGeotagPoints } from '../util
 import { parseEPerjadinV3 } from './parserV3';
 
 const DEFAULT_WEBAPP_URL =
-  'https://script.google.com/macros/s/AKfycbzyyQCjskwpdrqOCWUNg05QTEP8tIROgCnFaVLx6AMTPA04kJQzLUk2ZDm-w4rebnzp/exec';
+  'https://script.google.com/macros/s/AKfycbzR6tkMeQD2cARpMYqm6GpTszkNsXUsCLOQi_pMUaTMmBWrkSjKupSi3_iY2cIiGzd3/exec';
+const WEBAPP_STORAGE_KEY = 'eperjadin_webapp_url_v4';
 
 function rupiah(value: number) {
   return new Intl.NumberFormat('id-ID', {
@@ -34,7 +35,7 @@ async function parseApiPayload(response: Response) {
 
 export default function AppV3() {
   const [raw, setRaw] = useState('');
-  const [endpoint, setEndpoint] = useState(() => localStorage.getItem('eperjadin_webapp_url') || DEFAULT_WEBAPP_URL);
+  const [endpoint, setEndpoint] = useState(() => localStorage.getItem(WEBAPP_STORAGE_KEY) || DEFAULT_WEBAPP_URL);
   const [kodeAkun, setKodeAkun] = useState('');
   const [statusPJ, setStatusPJ] = useState<'Belum Ditentukan' | 'Belum Lengkap' | 'Lengkap' | 'Disetujui'>('Belum Ditentukan');
   const [message, setMessage] = useState('');
@@ -83,7 +84,7 @@ export default function AppV3() {
       });
       const payload = await parseApiPayload(response);
       if (!payload.success) throw new Error(payload.message || 'Koneksi database tidak berhasil.');
-      localStorage.setItem('eperjadin_webapp_url', url);
+      localStorage.setItem(WEBAPP_STORAGE_KEY, url);
       setConnectionStatus('ok');
       setConnectionMessage(`Koneksi ePerjadin V${payload.version || 4} aktif.`);
     } catch (error) {
@@ -163,7 +164,7 @@ export default function AppV3() {
     setSaving(true);
     setMessage('');
     try {
-      localStorage.setItem('eperjadin_webapp_url', endpoint.trim());
+      localStorage.setItem(WEBAPP_STORAGE_KEY, endpoint.trim());
       const response = await fetch(endpoint.trim(), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
