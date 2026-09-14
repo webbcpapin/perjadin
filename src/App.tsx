@@ -235,6 +235,14 @@ function formatAccountName(account?: BudgetAccount) {
   return `${account.akunBelanja} ${accountKindLabel(account.jenis)} - ${account.roLabel} - ${account.uraian}`;
 }
 
+function withGeotagNote(row: Row): Row {
+  if (row.keterangan.trim() || !isProblemGeotag(row.statusGeotag)) return row;
+  const notes = fallbackGeotagIssues(row).map((issue) =>
+    `${issue.label} (${issue.expectedDate}, ${issue.expectedLocation}): ${issue.message}`,
+  );
+  return { ...row, keterangan: notes.join('\n') || `Geotag ${row.statusGeotag}; presensi wajib perlu dilengkapi.` };
+}
+
 function validateRow(row: Row, accounts: BudgetAccount[]): ValidationItem[] {
   const accountValid = !!row.kodeAkun && accounts.some((account) => account.kode === row.kodeAkun);
   const hasValue = row.nilaiRiil > 0 || row.totalPengeluaranRiil > 0 || row.totalEstimasiBiaya > 0;
@@ -254,7 +262,7 @@ function validateRow(row: Row, accounts: BudgetAccount[]): ValidationItem[] {
     {
       label: 'Geotag',
       ok: geotagOk,
-      message: 'Geotag bermasalah wajib diberi alasan/catatan sebelum simpan.',
+      message: isProblemGeotag(row.statusGeotag) ? 'Temuan geotag dicatat otomatis; data dapat disimpan.' : 'Geotag lengkap.',
     },
   ];
 }
@@ -497,12 +505,13 @@ function App() {
   }
 
   async function save() {
-    const row = buildRow();
-    if (!row) {
+    const parsedRow = buildRow();
+    if (!parsedRow) {
       setMessage('Data tidak terbaca. Paste detail perjadin atau detail pertanggungjawaban.');
       return;
     }
 
+    const row = withGeotagNote(parsedRow);
     const nextValidation = validateRow(row, accounts);
     setValidationItems(nextValidation);
     const failed = nextValidation.filter((item) => !item.ok);
@@ -550,7 +559,8 @@ function App() {
   async function saveEditedRow() {
     if (!editingRow) return;
 
-    const nextValidation = validateRow(editingRow, accounts);
+    const editedRow = withGeotagNote(editingRow);
+    const nextValidation = validateRow(editedRow, accounts);
     setValidationItems(nextValidation);
     const failed = nextValidation.filter((item) => !item.ok);
     if (failed.length > 0) {
@@ -558,7 +568,7 @@ function App() {
       return;
     }
 
-    setRows((prev) => prev.map((row) => (rowKey(row) === editingRowKey ? editingRow : row)));
+    setRows((prev) => prev.map((row) => (rowKey(row) === editingRowKey ? editedRow : row)));
     setEditingRow(null);
     setEditingRowKey('');
 
@@ -570,7 +580,7 @@ function App() {
     try {
       const res = await fetch(endpoint.trim(), {
         method: 'POST',
-        body: JSON.stringify({ action: 'upsertPerjadin', row: editingRow, previousKey: editingRowKey, accessCode }),
+        body: JSON.stringify({ action: 'upsertPerjadin', row: editedRow, previousKey: editingRowKey, accessCode }),
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       });
       const payload = await res.json();
