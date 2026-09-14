@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { CheckCircle2, ClipboardPaste, Database, MapPin, Save, ShieldAlert, WalletCards } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { CheckCircle2, ClipboardPaste, Database, MapPin, RefreshCw, Save, ShieldAlert, WalletCards } from 'lucide-react';
 import '../index.css';
 import { budgetAccounts, findBudgetAccount } from '../data/perjadinAccounts';
 import { inferDestinationFromGeotags, selectRequiredGeotagPoints } from '../utils/geotagRules';
@@ -7,6 +7,18 @@ import { parseEPerjadinV3 } from './parserV3';
 
 const DEFAULT_WEBAPP_URL =
   'https://script.google.com/macros/s/AKfycbzyyQCjskwpdrqOCWUNg05QTEP8tIROgCnFaVLx6AMTPA04kJQzLUk2ZDm-w4rebnzp/exec';
+
+const LEGACY_PIN_KEYS = ['eperjadin_access_code', 'eperjadin_webapp_token'];
+
+function initialPin() {
+  const current = sessionStorage.getItem('eperjadin_v3_pin');
+  if (current) return current;
+  for (const key of LEGACY_PIN_KEYS) {
+    const value = localStorage.getItem(key);
+    if (value) return value;
+  }
+  return '';
+}
 
 function rupiah(value: number) {
   return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(value || 0);
@@ -19,11 +31,13 @@ function today() {
 export default function AppV3() {
   const [raw, setRaw] = useState('');
   const [endpoint, setEndpoint] = useState(() => localStorage.getItem('eperjadin_webapp_url') || DEFAULT_WEBAPP_URL);
-  const [accessCode, setAccessCode] = useState(() => sessionStorage.getItem('eperjadin_v3_pin') || '');
+  const [accessCode, setAccessCode] = useState(initialPin);
   const [kodeAkun, setKodeAkun] = useState('');
   const [statusPJ, setStatusPJ] = useState<'Belum Lengkap' | 'Lengkap' | 'Disetujui'>('Belum Lengkap');
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'checking' | 'ok' | 'error'>('idle');
+  const [connectionMessage, setConnectionMessage] = useState('');
 
   const parsed = useMemo(() => parseEPerjadinV3(raw), [raw]);
   const detectedDestination = useMemo(() => {
@@ -39,7 +53,68 @@ export default function AppV3() {
   const effectiveAccount = parsed?.kodeAkun || kodeAkun;
   const account = effectiveAccount ? findBudgetAccount(effectiveAccount) : undefined;
   const sourceTotal = parsed?.totalNilaiRiil || parsed?.totalPengeluaranRiil || 0;
-  const ready = Boolean(parsed?.idKegiatan && parsed?.nomorST && parsed?.peserta && parsed?.nomorSPD && sourceTotal > 0 && account);
+  const dataReady = Boolean(parsed?.idKegiatan && parsed?.nomorST && parsed?.peserta && parsed?.nomorSPD && sourceTotal > 0 && account);
+  const ready = dataReady && connectionStatus === 'ok';
+
+  async function validateConnection(showSuccess = true) {
+    const url = endpoint.trim();
+    const pin = accessCode.trim();
+    if (!url) {
+      setConnectionStatus('error');
+      setConnectionMessage('URL Apps Script belum tersedia.');
+      return false;
+    }
+    if (!pin) {
+      setConnectionStatus('error');
+      setConnectionMessage('Masukkan PIN akses terlebih dahulu.');
+      return false;
+    }
+
+    setConnectionStatus('checking');
+    setConnectionMessage('Memeriksa koneksi dan PIN...');
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: 'getDashboard', accessCode: pin }),
+      });
+      const payload = await response.json();
+      if (!payload.success) throw new Error(payload.message || 'PIN tidak dapat divalidasi.');
+
+      localStorage.setItem('eperjadin_webapp_url', url);
+      sessionStorage.setItem('eperjadin_v3_pin', pin);
+      LEGACY_PIN_KEYS.forEach((key) => localStorage.removeItem(key));
+      setConnectionStatus('ok');
+      setConnectionMessage(showSuccess ? 'Koneksi Master E-Perjadin aktif. PIN valid.' : 'Koneksi aktif.');
+      return true;
+    } catch (error) {
+      setConnectionStatus('error');
+      const detail = error instanceof Error ? error.message : 'Gagal memeriksa koneksi.';
+      setConnectionMessage(detail === 'PIN akses tidak valid' ? 'PIN akses tidak valid. Masukkan PIN Master E-Perjadin yang digunakan pada versi sebelumnya.' : detail);
+      return false;
+    }
+  }
+
+  useEffect(() => {
+    if (!accessCode.trim() || !endpoint.trim()) return;
+    void validateConnection(false);
+    // Hanya migrasi otomatis pada saat halaman pertama kali dimuat.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function updateAccessCode(value: string) {
+    setAccessCode(value);
+    setConnectionStatus('idle');
+    setConnectionMessage('PIN berubah. Klik Uji Koneksi sebelum menyimpan.');
+    setMessage('');
+  }
+
+  function updateEndpoint(value: string) {
+    setEndpoint(value);
+    setConnectionStatus('idle');
+    setConnectionMessage('URL berubah. Klik Uji Koneksi sebelum menyimpan.');
+    setMessage('');
+  }
 
   async function save() {
     if (!parsed) {
@@ -56,6 +131,12 @@ export default function AppV3() {
     }
     if (!sourceTotal) {
       setMessage('Total Nilai Riil/Total Pengeluaran Riil belum terbaca. Data tidak disimpan.');
+      return;
+    }
+
+    const pinValid = connectionStatus === 'ok' ? true : await validateConnection(false);
+    if (!pinValid) {
+      setMessage('Penyimpanan dibatalkan karena koneksi/PIN belum valid.');
       return;
     }
 
@@ -78,7 +159,6 @@ export default function AppV3() {
       jenisPembayaran: parsed.dipaInisiator,
       namaPegawai: parsed.peserta,
       lamaHari: parsed.durasiHari,
-      // V3: uang harian sepenuhnya mengikuti hasil parsing ePerjadin.
       uangHarianPerHari: parsed.durasiHari > 0 ? Math.round(sourceTotal / parsed.durasiHari) : sourceTotal,
       totalUangHarian: sourceTotal,
       uangMuka: parsed.uangMuka,
@@ -87,7 +167,7 @@ export default function AppV3() {
       kurangLebihBayar: Math.max(0, sourceTotal - parsed.uangMuka),
       statusPJ,
       statusPersetujuan: parsed.statusUangHarian,
-      statusGeotag: geotag?.status || (parsed.geotags.length ? 'Tidak Lengkap' : 'Tidak Lengkap'),
+      statusGeotag: geotag?.status || 'Tidak Lengkap',
       start: points.start ? `${points.start.hariTanggal} ${points.start.waktuTagging} ${points.start.wilayahTagging}` : '',
       clockIn: points.clockIn ? `${points.clockIn.hariTanggal} ${points.clockIn.waktuTagging} ${points.clockIn.wilayahTagging}` : '',
       clockOut: points.clockOut ? `${points.clockOut.hariTanggal} ${points.clockOut.waktuTagging} ${points.clockOut.wilayahTagging}` : '',
@@ -98,7 +178,7 @@ export default function AppV3() {
       tanggalInput: today(),
       detailGeotag,
       keterangan: [
-        `Schema ePerjadin: v3`,
+        'Schema ePerjadin: v3',
         `NIP: ${parsed.nip || '-'}`,
         `Nomor SPD: ${parsed.nomorSPD}`,
         `PPK: ${parsed.ppk || '-'}`,
@@ -126,8 +206,6 @@ export default function AppV3() {
     setSaving(true);
     setMessage('');
     try {
-      localStorage.setItem('eperjadin_webapp_url', endpoint.trim());
-      sessionStorage.setItem('eperjadin_v3_pin', accessCode.trim());
       const response = await fetch(endpoint.trim(), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -180,9 +258,20 @@ export default function AppV3() {
                 <h2 className="font-semibold">Koneksi Database</h2>
               </div>
               <label className="text-xs font-medium text-slate-600">Apps Script Web App</label>
-              <input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} className="mt-1 w-full rounded-md border px-3 py-2 text-xs" />
+              <input value={endpoint} onChange={(e) => updateEndpoint(e.target.value)} className="mt-1 w-full rounded-md border px-3 py-2 text-xs" />
               <label className="mt-3 block text-xs font-medium text-slate-600">PIN Akses</label>
-              <input type="password" inputMode="numeric" value={accessCode} onChange={(e) => setAccessCode(e.target.value)} className="mt-1 w-full rounded-md border px-3 py-2 text-sm" />
+              <div className="mt-1 flex gap-2">
+                <input type="password" inputMode="numeric" value={accessCode} onChange={(e) => updateAccessCode(e.target.value)} className="min-w-0 flex-1 rounded-md border px-3 py-2 text-sm" />
+                <button type="button" onClick={() => void validateConnection(true)} disabled={connectionStatus === 'checking'} className="inline-flex items-center gap-2 rounded-md border border-blue-700 px-3 py-2 text-xs font-medium text-blue-700 disabled:opacity-50">
+                  <RefreshCw className={`h-3.5 w-3.5 ${connectionStatus === 'checking' ? 'animate-spin' : ''}`} />
+                  Uji Koneksi
+                </button>
+              </div>
+              {connectionMessage && (
+                <p className={`mt-2 rounded-md p-2 text-xs ${connectionStatus === 'ok' ? 'bg-emerald-50 text-emerald-700' : connectionStatus === 'error' ? 'bg-red-50 text-red-700' : 'bg-slate-50 text-slate-600'}`}>
+                  {connectionMessage}
+                </p>
+              )}
             </section>
 
             <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -238,7 +327,10 @@ export default function AppV3() {
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="flex items-start gap-2">
               {ready ? <CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-600" /> : <ShieldAlert className="mt-0.5 h-5 w-5 text-amber-600" />}
-              <div><p className="font-medium">{ready ? 'Data siap disimpan' : 'Periksa data sebelum menyimpan'}</p><p className="text-sm text-slate-500">Nomor SPD dan akun wajib tersedia. Nilai transaksi tidak dihitung dari referensi SBM lokal.</p></div>
+              <div>
+                <p className="font-medium">{ready ? 'Data dan koneksi siap disimpan' : dataReady ? 'Data siap, verifikasi koneksi/PIN' : 'Periksa data sebelum menyimpan'}</p>
+                <p className="text-sm text-slate-500">Nomor SPD dan akun wajib tersedia. Nilai transaksi tidak dihitung dari referensi SBM lokal.</p>
+              </div>
             </div>
             <button disabled={!ready || saving} onClick={save} className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300"><Save className="h-4 w-4" />{saving ? 'Menyimpan...' : 'Simpan ke Master E-Perjadin'}</button>
           </div>
