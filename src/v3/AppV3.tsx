@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { CheckCircle2, ClipboardPaste, Database, MapPin, RefreshCw, Save, ShieldAlert, WalletCards } from 'lucide-react';
 import '../index.css';
 import { budgetAccounts, findBudgetAccount } from '../data/perjadinAccounts';
@@ -8,18 +8,6 @@ import { parseEPerjadinV3 } from './parserV3';
 const DEFAULT_WEBAPP_URL =
   'https://script.google.com/macros/s/AKfycbzyyQCjskwpdrqOCWUNg05QTEP8tIROgCnFaVLx6AMTPA04kJQzLUk2ZDm-w4rebnzp/exec';
 
-const LEGACY_PIN_KEYS = ['eperjadin_access_code', 'eperjadin_webapp_token'];
-
-function initialPin() {
-  const current = sessionStorage.getItem('eperjadin_v3_pin');
-  if (current) return current;
-  for (const key of LEGACY_PIN_KEYS) {
-    const value = localStorage.getItem(key);
-    if (value) return value;
-  }
-  return '';
-}
-
 function rupiah(value: number) {
   return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(value || 0);
 }
@@ -28,10 +16,31 @@ function today() {
   return new Date().toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-');
 }
 
+function storedLegacyCredential() {
+  return (
+    localStorage.getItem('eperjadin_webapp_token') ||
+    localStorage.getItem('eperjadin_access_code') ||
+    sessionStorage.getItem('eperjadin_v3_pin') ||
+    ''
+  ).trim();
+}
+
+function requestBody(payload: Record<string, unknown>) {
+  const credential = storedLegacyCredential();
+  return credential ? { ...payload, token: credential } : payload;
+}
+
+function normalizeConnectionError(value: unknown) {
+  const message = value instanceof Error ? value.message : String(value || 'Gagal terhubung ke database.');
+  if (/PIN akses tidak valid|PIN belum disetel/i.test(message)) {
+    return 'Backend database masih memakai autentikasi lama. PIN tidak lagi ditampilkan di aplikasi.';
+  }
+  return message;
+}
+
 export default function AppV3() {
   const [raw, setRaw] = useState('');
   const [endpoint, setEndpoint] = useState(() => localStorage.getItem('eperjadin_webapp_url') || DEFAULT_WEBAPP_URL);
-  const [accessCode, setAccessCode] = useState(initialPin);
   const [kodeAkun, setKodeAkun] = useState('');
   const [statusPJ, setStatusPJ] = useState<'Belum Lengkap' | 'Lengkap' | 'Disetujui'>('Belum Lengkap');
   const [message, setMessage] = useState('');
@@ -53,66 +62,41 @@ export default function AppV3() {
   const effectiveAccount = parsed?.kodeAkun || kodeAkun;
   const account = effectiveAccount ? findBudgetAccount(effectiveAccount) : undefined;
   const sourceTotal = parsed?.totalNilaiRiil || parsed?.totalPengeluaranRiil || 0;
-  const dataReady = Boolean(parsed?.idKegiatan && parsed?.nomorST && parsed?.peserta && parsed?.nomorSPD && sourceTotal > 0 && account);
-  const ready = dataReady && connectionStatus === 'ok';
+  const ready = Boolean(parsed?.idKegiatan && parsed?.nomorST && parsed?.peserta && parsed?.nomorSPD && sourceTotal > 0 && account);
 
-  async function validateConnection(showSuccess = true) {
+  async function validateConnection() {
     const url = endpoint.trim();
-    const pin = accessCode.trim();
     if (!url) {
       setConnectionStatus('error');
       setConnectionMessage('URL Apps Script belum tersedia.');
       return false;
     }
-    if (!pin) {
-      setConnectionStatus('error');
-      setConnectionMessage('Masukkan PIN akses terlebih dahulu.');
-      return false;
-    }
 
     setConnectionStatus('checking');
-    setConnectionMessage('Memeriksa koneksi dan PIN...');
+    setConnectionMessage('Memeriksa koneksi database...');
     try {
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'getDashboard', accessCode: pin }),
+        body: JSON.stringify(requestBody({ action: 'getDashboard' })),
       });
       const payload = await response.json();
-      if (!payload.success) throw new Error(payload.message || 'PIN tidak dapat divalidasi.');
-
+      if (!payload.success) throw new Error(payload.message || 'Koneksi database tidak berhasil.');
       localStorage.setItem('eperjadin_webapp_url', url);
-      sessionStorage.setItem('eperjadin_v3_pin', pin);
-      LEGACY_PIN_KEYS.forEach((key) => localStorage.removeItem(key));
       setConnectionStatus('ok');
-      setConnectionMessage(showSuccess ? 'Koneksi Master E-Perjadin aktif. PIN valid.' : 'Koneksi aktif.');
+      setConnectionMessage('Koneksi Master E-Perjadin aktif.');
       return true;
     } catch (error) {
       setConnectionStatus('error');
-      const detail = error instanceof Error ? error.message : 'Gagal memeriksa koneksi.';
-      setConnectionMessage(detail === 'PIN akses tidak valid' ? 'PIN akses tidak valid. Masukkan PIN Master E-Perjadin yang digunakan pada versi sebelumnya.' : detail);
+      setConnectionMessage(normalizeConnectionError(error));
       return false;
     }
-  }
-
-  useEffect(() => {
-    if (!accessCode.trim() || !endpoint.trim()) return;
-    void validateConnection(false);
-    // Hanya migrasi otomatis pada saat halaman pertama kali dimuat.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  function updateAccessCode(value: string) {
-    setAccessCode(value);
-    setConnectionStatus('idle');
-    setConnectionMessage('PIN berubah. Klik Uji Koneksi sebelum menyimpan.');
-    setMessage('');
   }
 
   function updateEndpoint(value: string) {
     setEndpoint(value);
     setConnectionStatus('idle');
-    setConnectionMessage('URL berubah. Klik Uji Koneksi sebelum menyimpan.');
+    setConnectionMessage('');
     setMessage('');
   }
 
@@ -131,12 +115,6 @@ export default function AppV3() {
     }
     if (!sourceTotal) {
       setMessage('Total Nilai Riil/Total Pengeluaran Riil belum terbaca. Data tidak disimpan.');
-      return;
-    }
-
-    const pinValid = connectionStatus === 'ok' ? true : await validateConnection(false);
-    if (!pinValid) {
-      setMessage('Penyimpanan dibatalkan karena koneksi/PIN belum valid.');
       return;
     }
 
@@ -206,16 +184,19 @@ export default function AppV3() {
     setSaving(true);
     setMessage('');
     try {
+      localStorage.setItem('eperjadin_webapp_url', endpoint.trim());
       const response = await fetch(endpoint.trim(), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'upsertPerjadin', row, accessCode: accessCode.trim() }),
+        body: JSON.stringify(requestBody({ action: 'upsertPerjadin', row })),
       });
       const payload = await response.json();
       if (!payload.success) throw new Error(payload.message || 'Gagal menyimpan data.');
+      setConnectionStatus('ok');
+      setConnectionMessage('Koneksi Master E-Perjadin aktif.');
       setMessage(`Tersimpan. ${parsed.nomorSPD} | ${parsed.peserta} | ${rupiah(sourceTotal)}`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Gagal menyimpan ke database.');
+      setMessage(normalizeConnectionError(error));
     } finally {
       setSaving(false);
     }
@@ -258,11 +239,9 @@ export default function AppV3() {
                 <h2 className="font-semibold">Koneksi Database</h2>
               </div>
               <label className="text-xs font-medium text-slate-600">Apps Script Web App</label>
-              <input value={endpoint} onChange={(e) => updateEndpoint(e.target.value)} className="mt-1 w-full rounded-md border px-3 py-2 text-xs" />
-              <label className="mt-3 block text-xs font-medium text-slate-600">PIN Akses</label>
               <div className="mt-1 flex gap-2">
-                <input type="password" inputMode="numeric" value={accessCode} onChange={(e) => updateAccessCode(e.target.value)} className="min-w-0 flex-1 rounded-md border px-3 py-2 text-sm" />
-                <button type="button" onClick={() => void validateConnection(true)} disabled={connectionStatus === 'checking'} className="inline-flex items-center gap-2 rounded-md border border-blue-700 px-3 py-2 text-xs font-medium text-blue-700 disabled:opacity-50">
+                <input value={endpoint} onChange={(e) => updateEndpoint(e.target.value)} className="min-w-0 flex-1 rounded-md border px-3 py-2 text-xs" />
+                <button type="button" onClick={() => void validateConnection()} disabled={connectionStatus === 'checking'} className="inline-flex items-center gap-2 rounded-md border border-blue-700 px-3 py-2 text-xs font-medium text-blue-700 disabled:opacity-50">
                   <RefreshCw className={`h-3.5 w-3.5 ${connectionStatus === 'checking' ? 'animate-spin' : ''}`} />
                   Uji Koneksi
                 </button>
@@ -328,7 +307,7 @@ export default function AppV3() {
             <div className="flex items-start gap-2">
               {ready ? <CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-600" /> : <ShieldAlert className="mt-0.5 h-5 w-5 text-amber-600" />}
               <div>
-                <p className="font-medium">{ready ? 'Data dan koneksi siap disimpan' : dataReady ? 'Data siap, verifikasi koneksi/PIN' : 'Periksa data sebelum menyimpan'}</p>
+                <p className="font-medium">{ready ? 'Data siap disimpan' : 'Periksa data sebelum menyimpan'}</p>
                 <p className="text-sm text-slate-500">Nomor SPD dan akun wajib tersedia. Nilai transaksi tidak dihitung dari referensi SBM lokal.</p>
               </div>
             </div>
