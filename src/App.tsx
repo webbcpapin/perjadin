@@ -454,7 +454,9 @@ function App() {
       tanggalInput: today(),
       detailGeotag,
       geotagIssues: geotagRule.issues,
-      keterangan: geotagReason.trim(),
+      keterangan: geotagReason.trim() || geotagRule.issues
+        .map((issue) => `${issue.label} (${issue.expectedDate}, ${issue.expectedLocation}): ${issue.message}`)
+        .join('\n'),
       jenisPerjadin: '',
       sumberData: 'Input manual ePerjadin Manager',
       waktuRekamSumber: new Date().toISOString(),
@@ -769,7 +771,7 @@ function App() {
             </div>
             <textarea
               className="mt-3 h-20 w-full rounded-md border border-zinc-300 p-3 text-sm outline-none focus:border-blue-500"
-              value={geotagReason}
+              value={geotagReason || buildRow()?.keterangan || ''}
               onChange={(event) => setGeotagReason(event.target.value)}
               placeholder="Catatan/alasan bila geotag tidak lengkap atau tidak sesuai."
             />
