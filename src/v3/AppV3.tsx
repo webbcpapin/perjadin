@@ -9,40 +9,34 @@ const DEFAULT_WEBAPP_URL =
   'https://script.google.com/macros/s/AKfycbzyyQCjskwpdrqOCWUNg05QTEP8tIROgCnFaVLx6AMTPA04kJQzLUk2ZDm-w4rebnzp/exec';
 
 function rupiah(value: number) {
-  return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(value || 0);
+  return new Intl.NumberFormat('id-ID', {
+    style: 'currency',
+    currency: 'IDR',
+    maximumFractionDigits: 0,
+  }).format(value || 0);
 }
 
 function today() {
   return new Date().toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-');
 }
 
-function storedLegacyCredential() {
-  return (
-    localStorage.getItem('eperjadin_webapp_token') ||
-    localStorage.getItem('eperjadin_access_code') ||
-    sessionStorage.getItem('eperjadin_v3_pin') ||
-    ''
-  ).trim();
-}
-
-function requestBody(payload: Record<string, unknown>) {
-  const credential = storedLegacyCredential();
-  return credential ? { ...payload, token: credential } : payload;
-}
-
-function normalizeConnectionError(value: unknown) {
-  const message = value instanceof Error ? value.message : String(value || 'Gagal terhubung ke database.');
-  if (/PIN akses tidak valid|PIN belum disetel/i.test(message)) {
-    return 'Backend database masih memakai autentikasi lama. PIN tidak lagi ditampilkan di aplikasi.';
+async function parseApiPayload(response: Response) {
+  const text = await response.text();
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+    if (/<!doctype|<html/i.test(trimmed)) {
+      throw new Error('Apps Script mengembalikan halaman HTML. Deploy Web App dengan akses Anyone, lalu gunakan URL /exec terbaru.');
+    }
+    throw new Error(`Respons database bukan JSON. HTTP ${response.status}.`);
   }
-  return message;
+  return JSON.parse(trimmed);
 }
 
 export default function AppV3() {
   const [raw, setRaw] = useState('');
   const [endpoint, setEndpoint] = useState(() => localStorage.getItem('eperjadin_webapp_url') || DEFAULT_WEBAPP_URL);
   const [kodeAkun, setKodeAkun] = useState('');
-  const [statusPJ, setStatusPJ] = useState<'Belum Lengkap' | 'Lengkap' | 'Disetujui'>('Belum Lengkap');
+  const [statusPJ, setStatusPJ] = useState<'Belum Ditentukan' | 'Belum Lengkap' | 'Lengkap' | 'Disetujui'>('Belum Ditentukan');
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'checking' | 'ok' | 'error'>('idle');
@@ -61,7 +55,15 @@ export default function AppV3() {
 
   const effectiveAccount = parsed?.kodeAkun || kodeAkun;
   const account = effectiveAccount ? findBudgetAccount(effectiveAccount) : undefined;
-  const sourceTotal = parsed?.totalNilaiRiil || parsed?.totalPengeluaranRiil || 0;
+  const totalKomponenDikirim = useMemo(() => {
+    if (!parsed) return 0;
+    return parsed.components
+      .filter((item) => /^(Dikirim|Disetujui|Dibayar|Selesai)$/i.test(item.status))
+      .reduce((sum, item) => sum + item.nilaiRiil, 0);
+  }, [parsed]);
+  const sourceTotal = parsed?.totalPengeluaranRiil || totalKomponenDikirim || 0;
+  const componentDelta = sourceTotal - totalKomponenDikirim;
+  const uangHarian = parsed?.components.find((item) => /^Uang Harian$/i.test(item.nama))?.nilaiRiil || 0;
   const ready = Boolean(parsed?.idKegiatan && parsed?.nomorST && parsed?.peserta && parsed?.nomorSPD && sourceTotal > 0 && account);
 
   async function validateConnection() {
@@ -69,27 +71,24 @@ export default function AppV3() {
     if (!url) {
       setConnectionStatus('error');
       setConnectionMessage('URL Apps Script belum tersedia.');
-      return false;
+      return;
     }
-
     setConnectionStatus('checking');
     setConnectionMessage('Memeriksa koneksi database...');
     try {
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(requestBody({ action: 'getDashboard' })),
+        body: JSON.stringify({ action: 'getDashboardV4' }),
       });
-      const payload = await response.json();
+      const payload = await parseApiPayload(response);
       if (!payload.success) throw new Error(payload.message || 'Koneksi database tidak berhasil.');
       localStorage.setItem('eperjadin_webapp_url', url);
       setConnectionStatus('ok');
-      setConnectionMessage('Koneksi Master E-Perjadin aktif.');
-      return true;
+      setConnectionMessage(`Koneksi ePerjadin V${payload.version || 4} aktif.`);
     } catch (error) {
       setConnectionStatus('error');
-      setConnectionMessage(normalizeConnectionError(error));
-      return false;
+      setConnectionMessage(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -101,84 +100,64 @@ export default function AppV3() {
   }
 
   async function save() {
-    if (!parsed) {
-      setMessage('Data belum terbaca. Paste Detail Pertanggungjawaban ePerjadin terlebih dahulu.');
-      return;
-    }
-    if (!account) {
-      setMessage('Akun belum teridentifikasi. Pilih akun yang benar sebelum menyimpan.');
-      return;
-    }
-    if (!parsed.nomorSPD) {
-      setMessage('Nomor SPD belum terbaca. Data tidak disimpan.');
-      return;
-    }
-    if (!sourceTotal) {
-      setMessage('Total Nilai Riil/Total Pengeluaran Riil belum terbaca. Data tidak disimpan.');
-      return;
-    }
+    if (!parsed) return setMessage('Data belum terbaca. Paste Detail Pertanggungjawaban ePerjadin terlebih dahulu.');
+    if (!account) return setMessage('Akun belum teridentifikasi. Pilih akun yang benar sebelum menyimpan.');
+    if (!parsed.nomorSPD) return setMessage('Nomor SPD belum terbaca. Data tidak disimpan.');
+    if (!sourceTotal) return setMessage('Total Pengeluaran Riil belum terbaca. Data tidak disimpan.');
 
     const points = geotag?.points || {};
     const detailGeotag = parsed.geotags
       .map((item) => `${item.hariTanggal} ${item.waktuTagging} ${item.wilayahTagging} ${item.lokasiTagging}`.trim())
       .join(' | ');
+    const kunciSPD = `${parsed.idKegiatan}|${parsed.nomorSPD}`.toLowerCase();
 
     const row = {
-      tahap: 'Pertanggungjawaban',
+      kunciSPD,
       idKegiatan: parsed.idKegiatan,
       namaKegiatan: parsed.namaKegiatan,
       nomorST: parsed.nomorST,
+      lampiranST: parsed.lampiranST,
       nomorKegiatan: parsed.nomorKegiatan,
-      nka: parsed.nomorSPD,
-      tanggalKegiatan: parsed.tanggalKegiatan,
+      dipaInisiator: parsed.dipaInisiator,
+      ppk: parsed.ppk,
+      peserta: parsed.peserta,
+      nip: parsed.nip,
+      nomorSPD: parsed.nomorSPD,
+      nomorPerjalanan: parsed.nomorPerjalanan,
+      jumlahRute: parsed.jumlahRute,
       tujuan: detectedDestination,
-      kotaTujuan: detectedDestination,
-      output: '',
-      jenisPembayaran: parsed.dipaInisiator,
-      namaPegawai: parsed.peserta,
-      lamaHari: parsed.durasiHari,
-      uangHarianPerHari: parsed.durasiHari > 0 ? Math.round(sourceTotal / parsed.durasiHari) : sourceTotal,
-      totalUangHarian: sourceTotal,
+      tanggalMulai: parsed.tanggalMulai,
+      tanggalSelesai: parsed.tanggalSelesai,
+      tanggalKegiatan: parsed.tanggalKegiatan,
+      durasiHari: parsed.durasiHari,
+      menginap: parsed.menginap,
       uangMuka: parsed.uangMuka,
-      totalEstimasiBiaya: parsed.totalNilaiSBM || parsed.nilaiSBMAwal || sourceTotal,
-      totalPengeluaranRiil: parsed.totalPengeluaranRiil || sourceTotal,
-      kurangLebihBayar: Math.max(0, sourceTotal - parsed.uangMuka),
+      totalPengeluaranRiil: sourceTotal,
+      kodeAkun: account.kode,
+      namaAkun: account.nama,
       statusPJ,
-      statusPersetujuan: parsed.statusUangHarian,
-      statusGeotag: geotag?.status || 'Tidak Lengkap',
+      statusGeotag: geotag?.status || 'Belum Dinilai',
       start: points.start ? `${points.start.hariTanggal} ${points.start.waktuTagging} ${points.start.wilayahTagging}` : '',
       clockIn: points.clockIn ? `${points.clockIn.hariTanggal} ${points.clockIn.waktuTagging} ${points.clockIn.wilayahTagging}` : '',
       clockOut: points.clockOut ? `${points.clockOut.hariTanggal} ${points.clockOut.waktuTagging} ${points.clockOut.wilayahTagging}` : '',
       end: points.end ? `${points.end.hariTanggal} ${points.end.waktuTagging} ${points.end.wilayahTagging}` : '',
-      volume: parsed.jumlahRute,
-      nilaiRiil: sourceTotal,
-      kodeAkun: account.kode,
-      tanggalInput: today(),
       detailGeotag,
-      keterangan: [
-        'Schema ePerjadin: v3',
-        `NIP: ${parsed.nip || '-'}`,
-        `Nomor SPD: ${parsed.nomorSPD}`,
-        `PPK: ${parsed.ppk || '-'}`,
-        `DIPA Inisiator: ${parsed.dipaInisiator || '-'}`,
-        `Nilai SBM Awal: ${rupiah(parsed.nilaiSBMAwal)}`,
-        `Total Nilai SBM: ${rupiah(parsed.totalNilaiSBM)}`,
-        `Total Nilai Riil: ${rupiah(sourceTotal)}`,
-        `Efisiensi: ${parsed.efisiensi || 0}%`,
-      ].join('\n'),
-      jenisPerjadin: 'Perjadin Nasional',
-      sumberData: 'Input parsing ePerjadin v3',
+      tanggalInput: today(),
+      sumberData: 'Input parsing ePerjadin v4',
       waktuRekamSumber: new Date().toISOString(),
-      sourceRecordKey: `${parsed.idKegiatan}|${parsed.nomorSPD}|pertanggungjawaban`.toLowerCase(),
-      nomorSPD: parsed.nomorSPD,
-      nip: parsed.nip,
-      ppk: parsed.ppk,
-      dipaInisiator: parsed.dipaInisiator,
-      nilaiSBMAwal: parsed.nilaiSBMAwal,
-      totalNilaiSBM: parsed.totalNilaiSBM,
-      totalNilaiRiil: sourceTotal,
-      efisiensi: parsed.efisiensi,
-      schemaVersion: 3,
+      schemaVersion: 4,
+      routes: parsed.routes,
+      components: parsed.components,
+      geotags: parsed.geotags,
+
+      // Field kompatibilitas. Backend V4 tidak memakai perhitungan SBM lokal.
+      tahap: 'Pertanggungjawaban',
+      nka: parsed.nomorSPD,
+      namaPegawai: parsed.peserta,
+      lamaHari: parsed.durasiHari,
+      uangHarianPerHari: parsed.durasiHari > 0 ? Math.round(uangHarian / parsed.durasiHari) : uangHarian,
+      totalUangHarian: uangHarian,
+      nilaiRiil: sourceTotal,
     };
 
     setSaving(true);
@@ -188,15 +167,17 @@ export default function AppV3() {
       const response = await fetch(endpoint.trim(), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(requestBody({ action: 'upsertPerjadin', row })),
+        body: JSON.stringify({ action: 'upsertPerjadinV4', row }),
       });
-      const payload = await response.json();
+      const payload = await parseApiPayload(response);
       if (!payload.success) throw new Error(payload.message || 'Gagal menyimpan data.');
       setConnectionStatus('ok');
-      setConnectionMessage('Koneksi Master E-Perjadin aktif.');
-      setMessage(`Tersimpan. ${parsed.nomorSPD} | ${parsed.peserta} | ${rupiah(sourceTotal)}`);
+      setConnectionMessage('Koneksi ePerjadin V4 aktif.');
+      setMessage(
+        `Tersimpan. ${parsed.nomorSPD} | ${parsed.peserta} | ${rupiah(sourceTotal)} | ${parsed.components.length} komponen`,
+      );
     } catch (error) {
-      setMessage(normalizeConnectionError(error));
+      setMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setSaving(false);
     }
@@ -210,9 +191,9 @@ export default function AppV3() {
           <div className="mt-1 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
             <div>
               <h1 className="text-2xl font-semibold">Monitoring Pertanggungjawaban Perjalanan Dinas</h1>
-              <p className="mt-1 text-sm text-slate-500">Parser v3. Nilai uang harian dan nilai riil mengikuti hasil copy dari ePerjadin.</p>
+              <p className="mt-1 text-sm text-slate-500">Parser v4. Seluruh komponen biaya mengikuti nilai hasil copy ePerjadin.</p>
             </div>
-            <div className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-800">Schema v3</div>
+            <div className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-800">Schema v4</div>
           </div>
         </div>
       </header>
@@ -228,7 +209,7 @@ export default function AppV3() {
               value={raw}
               onChange={(event) => setRaw(event.target.value)}
               className="h-[420px] w-full rounded-lg border border-slate-300 p-4 font-mono text-xs leading-5 outline-none focus:border-blue-500"
-              placeholder="Paste seluruh teks Detail Pertanggungjawaban di sini..."
+              placeholder="Paste seluruh teks Detail Pertanggungjawaban dan Presensi ePerjadin di sini..."
             />
           </section>
 
@@ -236,7 +217,7 @@ export default function AppV3() {
             <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-3 flex items-center gap-2">
                 <Database className="h-5 w-5 text-blue-700" />
-                <h2 className="font-semibold">Koneksi Database</h2>
+                <h2 className="font-semibold">Koneksi Database V4</h2>
               </div>
               <label className="text-xs font-medium text-slate-600">Apps Script Web App</label>
               <div className="mt-1 flex gap-2">
@@ -265,55 +246,81 @@ export default function AppV3() {
               {!account && parsed && <p className="mt-2 text-xs text-amber-700">Kode akun tidak ada pada hasil copy. Pilih akun secara manual.</p>}
               <label className="mt-3 block text-xs font-medium text-slate-600">Status Pertanggungjawaban</label>
               <select value={statusPJ} onChange={(e) => setStatusPJ(e.target.value as typeof statusPJ)} className="mt-1 w-full rounded-md border px-3 py-2 text-sm">
-                <option>Belum Lengkap</option><option>Lengkap</option><option>Disetujui</option>
+                <option>Belum Ditentukan</option><option>Belum Lengkap</option><option>Lengkap</option><option>Disetujui</option>
               </select>
             </section>
           </aside>
         </div>
 
         {parsed && (
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <InfoCard title="Kegiatan" icon={<CheckCircle2 className="h-4 w-4" />} lines={[parsed.namaKegiatan, parsed.nomorST, parsed.nomorKegiatan]} />
-            <InfoCard title="SPD" icon={<Database className="h-4 w-4" />} lines={[parsed.peserta, parsed.nip ? `NIP ${parsed.nip}` : '', parsed.nomorSPD]} />
-            <InfoCard title="Keuangan" icon={<WalletCards className="h-4 w-4" />} lines={[`Riil ${rupiah(sourceTotal)}`, `SBM ${rupiah(parsed.totalNilaiSBM || parsed.nilaiSBMAwal)}`, `Uang Muka ${rupiah(parsed.uangMuka)}`]} />
-            <InfoCard title="Presensi" icon={<MapPin className="h-4 w-4" />} lines={[`${parsed.geotags.length} geotag`, geotag?.status || 'Belum dinilai', detectedDestination]} />
-          </section>
+          <>
+            <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <InfoCard title="Kegiatan" icon={<CheckCircle2 className="h-4 w-4" />} lines={[parsed.namaKegiatan, parsed.nomorST, parsed.nomorKegiatan || 'Nomor kegiatan: -']} />
+              <InfoCard title="SPD" icon={<Database className="h-4 w-4" />} lines={[parsed.peserta, parsed.nip ? `NIP ${parsed.nip}` : '', parsed.nomorSPD]} />
+              <InfoCard title="Keuangan" icon={<WalletCards className="h-4 w-4" />} lines={[`Total ${rupiah(sourceTotal)}`, `${parsed.components.length} komponen`, `Uang Muka ${rupiah(parsed.uangMuka)}`]} />
+              <InfoCard title="Presensi" icon={<MapPin className="h-4 w-4" />} lines={[`${parsed.geotags.length} titik`, geotag?.status || 'Belum dinilai', detectedDestination]} />
+            </section>
+
+            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h2 className="font-semibold">Komponen Biaya</h2>
+                <span className={`rounded-full px-3 py-1 text-xs font-medium ${Math.abs(componentDelta) < 1 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
+                  {Math.abs(componentDelta) < 1 ? 'Total komponen sesuai' : `Selisih ${rupiah(componentDelta)}`}
+                </span>
+              </div>
+              {parsed.components.length ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[650px] text-left text-sm">
+                    <thead className="border-b bg-slate-50 text-xs uppercase text-slate-500">
+                      <tr><th className="px-3 py-2">Komponen</th><th className="px-3 py-2">Status</th><th className="px-3 py-2 text-right">Nilai Riil</th></tr>
+                    </thead>
+                    <tbody>
+                      {parsed.components.map((item, index) => (
+                        <tr key={`${item.nama}-${index}`} className="border-b last:border-0">
+                          <td className="px-3 py-2">{item.nama}</td>
+                          <td className="px-3 py-2">{item.status || '-'}</td>
+                          <td className="px-3 py-2 text-right font-medium">{rupiah(item.nilaiRiil)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="border-t bg-slate-50 font-semibold">
+                      <tr><td className="px-3 py-2" colSpan={2}>Total komponen dikirim</td><td className="px-3 py-2 text-right">{rupiah(totalKomponenDikirim)}</td></tr>
+                      <tr><td className="px-3 py-2" colSpan={2}>Total Pengeluaran Riil</td><td className="px-3 py-2 text-right">{rupiah(sourceTotal)}</td></tr>
+                    </tfoot>
+                  </table>
+                </div>
+              ) : <p className="text-sm text-amber-700">Komponen biaya belum terbaca dari hasil copy.</p>}
+            </section>
+
+            {parsed.geotags.length > 0 && (
+              <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h2 className="mb-3 font-semibold">Presensi / Geotag</h2>
+                <div className="space-y-2">
+                  {parsed.geotags.map((item, index) => (
+                    <div key={`${item.hariTanggal}-${item.waktuTagging}-${index}`} className="grid gap-1 rounded-lg border border-slate-200 p-3 text-sm md:grid-cols-[130px_80px_160px_1fr]">
+                      <span className="font-medium">{item.hariTanggal}</span><span>{item.waktuTagging}</span><span>{item.wilayahTagging}</span><span className="text-slate-600">{item.lokasiTagging}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+          </>
         )}
 
-        {parsed && (
-          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <Data label="PPK" value={parsed.ppk} />
-              <Data label="DIPA Inisiator" value={parsed.dipaInisiator} />
-              <Data label="Tanggal" value={parsed.tanggalKegiatan} />
-              <Data label="Durasi" value={`${parsed.durasiHari} hari`} />
-              <Data label="Nilai SBM Awal" value={rupiah(parsed.nilaiSBMAwal)} />
-              <Data label="Total Nilai SBM" value={rupiah(parsed.totalNilaiSBM)} />
-              <Data label="Total Nilai Riil" value={rupiah(sourceTotal)} />
-              <Data label="Efisiensi" value={`${parsed.efisiensi || 0}%`} />
-            </div>
-
-            <div className="mt-5 overflow-x-auto rounded-lg border">
-              <table className="min-w-full text-left text-sm">
-                <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="px-3 py-2">Tanggal</th><th className="px-3 py-2">Waktu</th><th className="px-3 py-2">Wilayah</th><th className="px-3 py-2">Lokasi</th></tr></thead>
-                <tbody>{parsed.geotags.map((item, index) => <tr key={`${item.hariTanggal}-${item.waktuTagging}-${index}`} className="border-t"><td className="px-3 py-2">{item.hariTanggal}</td><td className="px-3 py-2">{item.waktuTagging}</td><td className="px-3 py-2">{item.wilayahTagging}</td><td className="px-3 py-2 text-slate-600">{item.lokasiTagging}</td></tr>)}</tbody>
-              </table>
-            </div>
-          </section>
-        )}
-
-        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="flex items-start gap-2">
               {ready ? <CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-600" /> : <ShieldAlert className="mt-0.5 h-5 w-5 text-amber-600" />}
               <div>
-                <p className="font-medium">{ready ? 'Data siap disimpan' : 'Periksa data sebelum menyimpan'}</p>
-                <p className="text-sm text-slate-500">Nomor SPD dan akun wajib tersedia. Nilai transaksi tidak dihitung dari referensi SBM lokal.</p>
+                <p className="text-sm font-semibold">{ready ? 'Data siap disimpan' : 'Lengkapi data terlebih dahulu'}</p>
+                <p className="text-xs text-slate-500">Nomor SPD, total pengeluaran, dan akun wajib tersedia. Seluruh komponen biaya disimpan terpisah.</p>
               </div>
             </div>
-            <button disabled={!ready || saving} onClick={save} className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300"><Save className="h-4 w-4" />{saving ? 'Menyimpan...' : 'Simpan ke Master E-Perjadin'}</button>
+            <button onClick={() => void save()} disabled={!ready || saving} className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300">
+              <Save className="h-4 w-4" />{saving ? 'Menyimpan...' : 'Simpan ke Master E-Perjadin V4'}
+            </button>
           </div>
-          {message && <p className="mt-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">{message}</p>}
+          {message && <p className="mt-3 rounded-md bg-blue-50 p-3 text-sm text-blue-800">{message}</p>}
         </section>
       </section>
     </main>
@@ -321,9 +328,10 @@ export default function AppV3() {
 }
 
 function InfoCard({ title, icon, lines }: { title: string; icon: React.ReactNode; lines: string[] }) {
-  return <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex items-center gap-2 text-sm font-semibold text-slate-700">{icon}{title}</div><div className="mt-3 space-y-1">{lines.filter(Boolean).map((line) => <p key={line} className="truncate text-sm text-slate-600">{line}</p>)}</div></div>;
-}
-
-function Data({ label, value }: { label: string; value: string }) {
-  return <div><p className="text-xs font-medium uppercase tracking-wide text-slate-400">{label}</p><p className="mt-1 text-sm font-medium text-slate-800">{value || '-'}</p></div>;
+  return (
+    <article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex items-center gap-2 text-blue-700">{icon}<h3 className="text-sm font-semibold">{title}</h3></div>
+      <div className="mt-3 space-y-1 text-sm text-slate-700">{lines.filter(Boolean).map((line, index) => <p key={`${line}-${index}`} className="break-words">{line}</p>)}</div>
+    </article>
+  );
 }
