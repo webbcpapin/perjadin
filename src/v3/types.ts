@@ -3,6 +3,7 @@ export interface GeotagEntryV3 {
   waktuTagging: string;
   wilayahTagging: string;
   lokasiTagging: string;
+  klasifikasi?: string;
 }
 
 export interface RouteV3 {
@@ -12,10 +13,21 @@ export interface RouteV3 {
   tanggalSelesai: string;
   tanggalKegiatan: string;
   durasiHari: number;
+  menginap?: string;
+}
+
+export interface CostComponentV4 {
+  nomorRute: number;
+  nama: string;
+  status: string;
+  nilaiRiil: number;
+  nilaiSBM?: number;
+  buktiDukung?: string[];
+  keterangan?: string;
 }
 
 export interface ParsedPerjadinV3 {
-  schemaVersion: 3;
+  schemaVersion: 4;
   sourceType: 'pertanggungjawaban';
   namaKegiatan: string;
   idKegiatan: string;
@@ -30,8 +42,11 @@ export interface ParsedPerjadinV3 {
   nomorSPD: string;
   nomorPerjalanan: string;
   tujuan: string;
+  tanggalMulai: string;
+  tanggalSelesai: string;
   tanggalKegiatan: string;
   durasiHari: number;
+  menginap: string;
   statusUangHarian: string;
   uangMuka: number;
   totalPengeluaranRiil: number;
@@ -41,5 +56,6 @@ export interface ParsedPerjadinV3 {
   efisiensi: number;
   kodeAkun: string;
   routes: RouteV3[];
+  components: CostComponentV4[];
   geotags: GeotagEntryV3[];
 }
