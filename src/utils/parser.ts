@@ -77,8 +77,8 @@ function currencyAfterLabel(lines: string[], label: RegExp) {
   for (let i = 0; i < lines.length; i++) {
     if (!label.test(lines[i])) continue;
     for (let j = i; j < lines.length && j <= i + 4; j++) {
-      const amount = parseRupiah(lines[j]);
-      if (amount > 0) return amount;
+      if (j > i && isLabel(lines[j])) break;
+      if (/Rp\s*[\d.,]+/i.test(lines[j])) return parseRupiah(lines[j]);
     }
   }
   return 0;
@@ -87,7 +87,19 @@ function currencyAfterLabel(lines: string[], label: RegExp) {
 function parseRupiah(value: string) {
   const match = value.match(/Rp\s*([\d.,]+)/i);
   if (!match) return 0;
-  return Number(match[1].replace(/[.,]/g, '')) || 0;
+  return Number(match[1].replace(/\./g, '').replace(',', '.')) || 0;
+}
+
+function routeDetails(lines: string[]) {
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^Rute\s+\d+$/i.test(lines[i])) continue;
+    const date = lines[i + 2]?.match(/^(\d{1,2})(?:\s+([A-Za-z]+)\s+(\d{4}))?\s+s\.d\.\s+(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})\s*\(\d+\s+Hari\)$/i);
+    if (date) return {
+      tujuan: lines[i + 1],
+      tanggal: `${date[1]} ${date[2] || date[5]} ${date[3] || date[6]} s/d ${date[4]} ${date[5]} ${date[6]}`,
+    };
+  }
+  return { tujuan: '', tanggal: '' };
 }
 
 function extractAccountCode(text: string) {
@@ -156,6 +168,7 @@ export function parseDetailPertanggungjawaban(text: string): ParsedData | null {
 
   const lines = linesFromText(text);
   const result = blankParsedData('pertanggungjawaban');
+  const route = routeDetails(lines);
   let inGeotagSection = false;
   let lastHariTanggal = '';
 
@@ -163,12 +176,13 @@ export function parseDetailPertanggungjawaban(text: string): ParsedData | null {
   result.idKegiatan = valueAfterLabel(lines, /^Id Kegiatan/i);
   result.nomorST = valueAfterLabel(lines, /^Nomor ST/i) || findFirstMatch(lines, /(ST-\d+\/[A-Z.0-9]+\/\d+)/i);
   result.lampiranST = [valueAfterLabel(lines, /^Lampiran ST/i)].filter(Boolean);
-  result.tanggalKegiatan = valueAfterLabel(lines, /^Tanggal Kegiatan/i);
+  result.tanggalKegiatan = valueAfterLabel(lines, /^Tanggal Kegiatan/i) || route.tanggal;
+  result.kotaTujuan = valueAfterLabel(lines, /^Kota Tujuan/i) || route.tujuan;
   result.nomorKegiatan = valueAfterLabel(lines, /^Nomor Kegiatan/i) || findFirstMatch(lines, /(KPD-\d+\/\d+-\d+)/i);
   result.nomorKomitmenAnggaran =
     findWindowMatch(lines, /^Nomor Komitmen Anggaran/i, /(NKA-\d+\/\d+-\d+)/i) ||
     findFirstMatch(lines, /(NKA-\d+\/\d+-\d+)/i);
-  result.peserta = valueAfterLabel(lines, /^Peserta Kegiatan/i);
+  result.peserta = valueAfterLabel(lines, /^Peserta Kegiatan/i) || valueAfterLabel(lines, /^Pelaksana SPD/i);
   result.uangMuka = currencyAfterLabel(lines, /^Uang Muka/i);
   result.totalPengeluaranRiil = currencyAfterLabel(lines, /^Total Pengeluaran Riil/i);
   result.totalKurangBayar = currencyAfterLabel(lines, /^Total Kurang Bayar/i);
@@ -177,7 +191,8 @@ export function parseDetailPertanggungjawaban(text: string): ParsedData | null {
   const ruteMatch = text.match(/terdapat\s+(\d+)\s+Rute/i);
   if (ruteMatch) result.jumlahRute = Number(ruteMatch[1]) || 1;
 
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
     const lineLower = line.toLowerCase();
 
     if (lineLower.includes('geotagging') || lineLower.includes('geotag')) {
@@ -186,6 +201,18 @@ export function parseDetailPertanggungjawaban(text: string): ParsedData | null {
     }
 
     if (!inGeotagSection) continue;
+
+    // V2 puts the region before the address and omits repeated dates.
+    const numericDate = line.match(/^(\d{2}-\d{2}-\d{4})(?:\s|$)/);
+    if (numericDate) lastHariTanggal = numericDate[1];
+    const v2 = line.match(/^(?:(\d{2}-\d{2}-\d{4})\s+)?(\d{1,2}:\d{2})\s+(.+)$/);
+    if (v2 && /^\d{2}-\d{2}-\d{4}$/.test(lastHariTanggal)) {
+      const next = lines[index + 1] || '';
+      const address = next && !isLabel(next) && !/^(?:\d|Pelaksana SPD|Nomor SPD|NIP|[-]+|GEOTAG)/i.test(next) ? next : '';
+      result.geotags.push({ hariTanggal: lastHariTanggal, waktuTagging: v2[2], wilayahTagging: v2[3], lokasiTagging: address });
+      if (address) index++;
+      continue;
+    }
 
     if (
       lineLower.includes('items per page') ||
