@@ -305,6 +305,22 @@ function parseSequentialGeotags(lines: string[]) {
     if (!active) continue;
     if (lower === 'ringkasan' && entries.length > 0) break;
     if (/hari, tanggal|waktu tagging|lokasi geo tagging|lihat di map/i.test(line)) continue;
+
+    // Satu Kemenkeu commonly copies date, time, and region on one line,
+    // followed by the geotag address on the next line.
+    const combined = line.match(/^(\d{2}-\d{2}-\d{4})\s+(\d{1,2}[:.]\d{2})\s+(.+)$/);
+    if (combined) {
+      const address = lines[i + 1] && !isFieldLabel(lines[i + 1]) ? lines[i + 1] : '';
+      entries.push({
+        hariTanggal: combined[1],
+        waktuTagging: combined[2].replace('.', ':'),
+        wilayahTagging: combined[3],
+        lokasiTagging: address,
+      });
+      if (address) i++;
+      continue;
+    }
+
     if (DATE_NUMERIC_RE.test(line)) {
       currentDate = line;
       continue;
