@@ -200,6 +200,16 @@ export function parseDetailPertanggungjawaban(text: string): ParsedData | null {
       continue;
     }
 
+    // Accept copied table rows even when the source omits the geotag section marker.
+    const directGeotag = line.match(/^(\d{2}-\d{2}-\d{4})\s+(\d{1,2}:\d{2})\s+(.+)$/);
+    if (directGeotag) {
+      const next = lines[index + 1] || '';
+      const address = next && !isLabel(next) && !/^(?:\d{2}-\d{2}-\d{4}\s+\d{1,2}:\d{2}|Pelaksana SPD|Nomor SPD|NIP|Ringkasan)/i.test(next) ? next : '';
+      result.geotags.push({ hariTanggal: directGeotag[1], waktuTagging: directGeotag[2], wilayahTagging: directGeotag[3], lokasiTagging: address });
+      if (address) index++;
+      continue;
+    }
+
     if (!inGeotagSection) continue;
 
     // V2 puts the region before the address and omits repeated dates.
