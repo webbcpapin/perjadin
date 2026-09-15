@@ -3,7 +3,7 @@ import type { GeotagEntry, ParsedData } from '@/types';
 
 const LABEL_RE = /^(Nama Kegiatan|Id Kegiatan|Nomor Kegiatan|Tujuan Kegiatan|Output|Tanggal Kegiatan|Kota Tujuan|Nomor ST|Lampiran ST|Kode Akun|Jenis Pembayaran|Total Estimasi Biaya|Total Uang Muka|Status|Peserta Kegiatan|Nomor Komitmen Anggaran|Uang Muka|Total Pengeluaran Riil|Total Kurang Bayar|Ringkasan|Rute Perjalanan Dinas|Geotagging Perjalan Dinas|Items per page)/i;
 const ACCOUNT_RE = /636722\.015\.52411[13]\.01505(?:CC|WA)\.\d{4}[A-Z]{3}\.A000000001\.00000\.2\.3051\.2\.000000\.000000/;
-const DATE_RE = /^(Sen|Sel|Rab|Kam|Jum|Sab|Min),?\s+\d{1,2}\s+\w+\s+\d{4}/i;
+const DATE_RE = /^(?:(Sen|Sel|Rab|Kam|Jum|Sab|Min),?\s+\d{1,2}\s+\w+\s+\d{4}|\d{1,2}-\d{1,2}-\d{4})/i;
 const TIME_RE = /^\d{1,2}[:.]\d{2}$/;
 
 function blankParsedData(sourceType: ParsedData['sourceType']): ParsedData {
@@ -30,8 +30,8 @@ function linesFromText(text: string) {
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
     .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0);
 }
 
 function isLabel(line: string) {
