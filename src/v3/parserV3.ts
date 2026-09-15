@@ -4,7 +4,7 @@ import type { CostComponentV4, GeotagEntryV3, ParsedPerjadinV3, RouteV3 } from '
 const ACCOUNT_RE = /636722\.015\.52411[13]\.01505(?:CC|WA)\.\d{4}[A-Z]{3}\.A000000001\.00000\.2\.3051\.2\.000000\.000000/i;
 const DATE_NUMERIC_RE = /^\d{2}-\d{2}-\d{4}$/;
 const TIME_RE = /^\d{1,2}[:.]\d{2}$/;
-const COMPONENT_STATUS_RE = /^(Dikirim|Draft|Disetujui|Ditolak|Dibatalkan|Dibayar|Selesai)$/i;
+const COMPONENT_STATUS_RE = /^(Dikirim|Draft|Disetujui(?:\s+PPK)?|Ditolak(?:\s+PPK)?|Dibatalkan|Dibayar|Selesai|Menunggu(?:\s+Persetujuan)?(?:\s+PPK)?|Diajukan(?:\s+ke\s+PPK)?)$/i;
 
 const FIELD_LABELS = [
   'Nama Kegiatan', 'Id Kegiatan', 'Nomor ST', 'Lampiran ST', 'Nomor Kegiatan',
@@ -112,6 +112,12 @@ function parseDateRangeLine(line: string) {
     return { start, end, combined: `${start} s/d ${end}`, duration: Number(long[7]) || 1 };
   }
 
+  const single = clean.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})\s*\((\d+)\s+Hari\)$/i);
+  if (single) {
+    const date = `${single[1]} ${single[2]} ${single[3]}`;
+    return { start: date, end: date, combined: date, duration: Number(single[4]) || 1 };
+  }
+
   const numeric = clean.match(/^(\d{2}-\d{2}-\d{4})\s+s\/?d\.?\s+(\d{2}-\d{2}-\d{4})(?:\s*\((\d+)\s+Hari\))?$/i);
   if (numeric) {
     return {
@@ -168,12 +174,24 @@ function parseMenginap(lines: string[]) {
   return 'Tidak Terbaca';
 }
 
+function normalizeComponentStatus(value: string) {
+  const status = cleanMarkdown(value);
+  if (/^Disetujui(?:\s+PPK)?$/i.test(status)) return 'Disetujui';
+  if (/^Ditolak(?:\s+PPK)?$/i.test(status)) return 'Ditolak';
+  if (/^Dikirim$/i.test(status)) return 'Dikirim';
+  if (/^Draft$/i.test(status)) return 'Draft';
+  if (/^Dibatalkan$/i.test(status)) return 'Dibatalkan';
+  if (/^Dibayar$/i.test(status)) return 'Dibayar';
+  if (/^Selesai$/i.test(status)) return 'Selesai';
+  return status;
+}
+
 function parseComponents(lines: string[]): CostComponentV4[] {
   const components: CostComponentV4[] = [];
   for (let i = 0; i < lines.length; i++) {
     if (!COMPONENT_STATUS_RE.test(lines[i])) continue;
 
-    const status = lines[i];
+    const status = normalizeComponentStatus(lines[i]);
     let name = '';
     for (let j = i - 1; j >= 0 && j >= i - 3; j--) {
       const candidate = cleanMarkdown(lines[j]);
@@ -236,16 +254,33 @@ function parseMarkdownTableGeotags(text: string) {
 
 function parseTabularGeotags(text: string) {
   const entries: GeotagEntryV3[] = [];
+  const rawLines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
   let currentDate = '';
-  for (const raw of text.split(/\r?\n/)) {
-    const parts = raw.split('\t').map(cleanMarkdown).filter(Boolean);
-    if (parts.length < 2) continue;
-    if (DATE_NUMERIC_RE.test(parts[0])) currentDate = parts[0];
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const raw = rawLines[i];
+    if (!raw.includes('\t')) continue;
+    const parts = raw.split('\t').map(cleanMarkdown);
+    if (parts.some((part) => /HARI, TANGGAL|WAKTU TAGGING|LOKASI GEO/i.test(part))) continue;
+
+    if (DATE_NUMERIC_RE.test(parts[0] || '')) currentDate = parts[0];
     const timeIndex = parts.findIndex((part) => TIME_RE.test(part));
     if (timeIndex < 0 || !currentDate) continue;
+
     const wilayah = parts[timeIndex + 1] || '';
-    const lokasi = parts[timeIndex + 2] || '';
+    let lokasi = parts[timeIndex + 2] || '';
     if (!wilayah) continue;
+
+    if (!lokasi) {
+      for (let j = i + 1; j < rawLines.length && j <= i + 2; j++) {
+        const candidate = cleanMarkdown(rawLines[j]);
+        if (!candidate) continue;
+        if (rawLines[j].includes('\t') || /^Ringkasan$/i.test(candidate)) break;
+        lokasi = candidate;
+        break;
+      }
+    }
+
     entries.push({
       hariTanggal: currentDate,
       waktuTagging: parts[timeIndex].replace('.', ':'),
@@ -289,22 +324,14 @@ function parseSequentialGeotags(lines: string[]) {
   return entries;
 }
 
-function dedupeGeotags(entries: GeotagEntryV3[]) {
-  const seen = new Set<string>();
-  return entries.filter((entry) => {
-    const key = `${entry.hariTanggal}|${entry.waktuTagging}|${entry.wilayahTagging}|${entry.lokasiTagging}`.toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
 function parseGeotags(text: string, lines: string[]) {
-  return dedupeGeotags([
-    ...parseMarkdownTableGeotags(text),
-    ...parseTabularGeotags(text),
-    ...parseSequentialGeotags(lines),
-  ]);
+  const markdown = parseMarkdownTableGeotags(text);
+  if (markdown.length > 0) return markdown;
+
+  const tabular = parseTabularGeotags(text);
+  if (tabular.length > 0) return tabular;
+
+  return parseSequentialGeotags(lines);
 }
 
 function normalizeDipa(value: string) {
@@ -349,7 +376,7 @@ export function parseEPerjadinV3(text: string): ParsedPerjadinV3 | null {
   const totalDikirim = components
     .filter((item) => /^(Dikirim|Disetujui|Dibayar|Selesai)$/i.test(item.status))
     .reduce((sum, item) => sum + item.nilaiRiil, 0);
-  const uangHarian = components.find((item) => /^Uang Harian$/i.test(item.nama));
+  const uangHarian = components.find((item) => /^Uang Harian\b/i.test(item.nama));
 
   return {
     schemaVersion: 4,
