@@ -8,6 +8,14 @@ import { parseEPerjadinV3 } from './parserV3';
 const DEFAULT_WEBAPP_URL =
   'https://script.google.com/macros/s/AKfycbzR6tkMeQD2cARpMYqm6GpTszkNsXUsCLOQi_pMUaTMmBWrkSjKupSi3_iY2cIiGzd3/exec';
 const WEBAPP_STORAGE_KEY = 'eperjadin_webapp_url_v4';
+const STATUS_PERTANGGUNGJAWABAN = [
+  'Belum Lengkap',
+  'Sudah Kirim',
+  'Proses Pencairan',
+  'Selesai Pencairan',
+  'Kekurangan Dokumen',
+] as const;
+type StatusPertanggungjawaban = (typeof STATUS_PERTANGGUNGJAWABAN)[number];
 
 function rupiah(value: number) {
   return new Intl.NumberFormat('id-ID', {
@@ -37,7 +45,7 @@ export default function AppV3() {
   const [raw, setRaw] = useState('');
   const [endpoint, setEndpoint] = useState(() => localStorage.getItem(WEBAPP_STORAGE_KEY) || DEFAULT_WEBAPP_URL);
   const [kodeAkun, setKodeAkun] = useState('');
-  const [statusPJ, setStatusPJ] = useState<'Belum Ditentukan' | 'Belum Lengkap' | 'Lengkap' | 'Disetujui'>('Belum Ditentukan');
+  const [statusPJ, setStatusPJ] = useState<StatusPertanggungjawaban>('Belum Lengkap');
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'checking' | 'ok' | 'error'>('idle');
@@ -246,8 +254,8 @@ export default function AppV3() {
               </select>
               {!account && parsed && <p className="mt-2 text-xs text-amber-700">Kode akun tidak ada pada hasil copy. Pilih akun secara manual.</p>}
               <label className="mt-3 block text-xs font-medium text-slate-600">Status Pertanggungjawaban</label>
-              <select value={statusPJ} onChange={(e) => setStatusPJ(e.target.value as typeof statusPJ)} className="mt-1 w-full rounded-md border px-3 py-2 text-sm">
-                <option>Belum Ditentukan</option><option>Belum Lengkap</option><option>Lengkap</option><option>Disetujui</option>
+              <select value={statusPJ} onChange={(e) => setStatusPJ(e.target.value as StatusPertanggungjawaban)} className="mt-1 w-full rounded-md border px-3 py-2 text-sm">
+                {STATUS_PERTANGGUNGJAWABAN.map((status) => <option key={status}>{status}</option>)}
               </select>
             </section>
           </aside>
