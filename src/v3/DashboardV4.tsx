@@ -6,6 +6,8 @@ type DashboardRow = Record<string, unknown>;
 
 type Props = { endpoint: string };
 
+const DEFAULT_V4_ENDPOINT = 'https://script.google.com/macros/s/AKfycbzR6tkMeQD2cARpMYqm6GpTszkNsXUsCLOQi_pMUaTMmBWrkSjKupSi3_iY2cIiGzd3/exec';
+
 const statuses = ['Belum Lengkap', 'Sudah Kirim', 'Proses Pencairan', 'Selesai Pencairan', 'Kekurangan Dokumen'];
 
 function text(row: DashboardRow, key: string) {
@@ -48,13 +50,24 @@ export default function DashboardV4({ endpoint }: Props) {
     setLoading(true);
     setError('');
     try {
-      const response = await fetch(endpoint.trim(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'getDashboardV4' }),
-      });
-      const payload = await readApiResponse(response);
+      const request = async (url: string) => {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ action: 'getDashboardV4' }),
+        });
+        return readApiResponse(response);
+      };
+      let payload;
+      try {
+        payload = await request(endpoint.trim() || DEFAULT_V4_ENDPOINT);
+      } catch (firstError) {
+        const current = endpoint.trim();
+        if (current === DEFAULT_V4_ENDPOINT || !/HTML|JSON|login|deployment/i.test(firstError instanceof Error ? firstError.message : String(firstError))) throw firstError;
+        payload = await request(DEFAULT_V4_ENDPOINT);
+      }
       if (!payload.success) throw new Error(String(payload.message || 'Database tidak dapat dibaca.'));
+      localStorage.setItem('eperjadin_webapp_url_v4', DEFAULT_V4_ENDPOINT);
       setRows(Array.isArray(payload.data) ? payload.data as DashboardRow[] : []);
     } catch (value) {
       setError(value instanceof Error ? value.message : String(value));
