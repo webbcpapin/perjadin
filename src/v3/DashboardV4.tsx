@@ -79,6 +79,30 @@ export default function DashboardV4({ endpoint }: Props) {
     return (filter === 'Semua' || status === filter) && haystack.includes(query.toLowerCase());
   }), [rows, query, filter]);
 
+  const employeeRows = useMemo(() => {
+    const grouped = new Map<string, { name: string; nip: string; total: number; followUp: number; statuses: string[]; issues: string[]; spds: string[] }>();
+    rows.forEach((row) => {
+      const name = text(row, 'Pelaksana SPD') || 'Nama belum terbaca';
+      const nip = text(row, 'NIP');
+      const key = nip || name;
+      const current = grouped.get(key) || { name, nip, total: 0, followUp: 0, statuses: [], issues: [], spds: [] };
+      const status = displayStatus(row);
+      const geotag = text(row, 'Status Geotag');
+      const presensi = number(row, 'Jumlah Presensi');
+      current.total += 1;
+      current.statuses.push(status);
+      current.spds.push(text(row, 'Nomor SPD'));
+      if (['Belum Lengkap', 'Kekurangan Dokumen'].includes(status) || geotag !== 'Lengkap' || presensi < 4) {
+        current.followUp += 1;
+        if (['Belum Lengkap', 'Kekurangan Dokumen'].includes(status)) current.issues.push(`${text(row, 'Nomor SPD')}: pertanggungjawaban ${status.toLowerCase()}`);
+        if (presensi < 4) current.issues.push(`${text(row, 'Nomor SPD')}: presensi baru ${presensi} titik`);
+        if (geotag && geotag !== 'Lengkap') current.issues.push(`${text(row, 'Nomor SPD')}: geotag ${geotag.toLowerCase()}`);
+      }
+      grouped.set(key, current);
+    });
+    return [...grouped.values()].sort((a, b) => b.followUp - a.followUp || a.name.localeCompare(b.name));
+  }, [rows]);
+
   return (
     <section className="space-y-5">
       <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
@@ -112,11 +136,16 @@ export default function DashboardV4({ endpoint }: Props) {
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <h3 className="font-semibold">Pegawai yang perlu diingatkan</h3>
             <div className="mt-3 space-y-2">
-              {stats.incomplete.slice(0, 6).map((row) => <div key={`${text(row, 'Kunci SPD')}`} className="flex items-start justify-between gap-3 rounded-lg bg-amber-50 px-3 py-2 text-sm"><span><strong>{text(row, 'Pelaksana SPD') || '-'}</strong><br /><span className="text-xs text-slate-600">{text(row, 'Nomor SPD')} · {displayStatus(row)}</span></span><span className="whitespace-nowrap text-xs text-amber-800">{number(row, 'Jumlah Presensi')} titik</span></div>)}
+              {employeeRows.filter((row) => row.followUp > 0).slice(0, 6).map((row) => <div key={row.nip || row.name} className="flex items-start justify-between gap-3 rounded-lg bg-amber-50 px-3 py-2 text-sm"><span><strong>{row.name}</strong><br /><span className="text-xs text-slate-600">{row.nip || 'NIP belum tersedia'} · {row.followUp} SPD perlu ditindaklanjuti</span></span><span className="whitespace-nowrap text-xs text-amber-800">{row.total} SPD</span></div>)}
               {!stats.incomplete.length && <p className="text-sm text-emerald-700">Tidak ada data yang perlu ditindaklanjuti.</p>}
             </div>
           </section>
         </div>
+
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-1 md:flex-row md:items-end md:justify-between"><div><h3 className="font-semibold">Monitoring per pegawai</h3><p className="mt-1 text-sm text-slate-500">Ringkasan ini dapat digunakan sebagai bahan pemberitahuan kepada masing-masing pegawai.</p></div><span className="text-xs text-slate-500">{employeeRows.length} pegawai terdata</span></div>
+          <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[900px] text-left text-sm"><thead className="border-b bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="px-3 py-3">Pegawai</th><th className="px-3 py-3">SPD</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Bahan pemberitahuan</th></tr></thead><tbody>{employeeRows.map((employee) => <tr key={employee.nip || employee.name} className="border-b align-top last:border-0"><td className="px-3 py-3"><div className="font-medium">{employee.name}</div><div className="text-xs text-slate-500">{employee.nip || 'NIP belum tersedia'}</div></td><td className="px-3 py-3"><div>{employee.total} SPD</div><div className="max-w-[220px] truncate text-xs text-slate-500">{employee.spds.join(', ')}</div></td><td className="px-3 py-3"><div className={employee.followUp ? 'font-semibold text-amber-700' : 'font-semibold text-emerald-700'}>{employee.followUp ? `${employee.followUp} perlu ditindaklanjuti` : 'Tidak ada temuan'}</div><div className="text-xs text-slate-500">{[...new Set(employee.statuses)].join(', ')}</div></td><td className="px-3 py-3 text-xs text-slate-600">{employee.issues.length ? employee.issues.slice(0, 4).join(' · ') : 'Dokumen dan presensi terpantau lengkap.'}</td></tr>)}</tbody></table></div>
+        </section>
 
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
