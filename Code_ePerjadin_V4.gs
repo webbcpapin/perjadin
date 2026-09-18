@@ -36,15 +36,13 @@ function ssV4_() {
   return SpreadsheetApp.openById(SPREADSHEET_ID);
 }
 
-function doGet() {
+function doGet(e) {
   try {
     setupEperjadinV4();
-    return jsonV4_({
-      success: true,
-      message: 'ePerjadin V4 API aktif',
-      version: 4,
-      sheets: [V4_SUMMARY_SHEET, V4_COMPONENT_SHEET, V4_ROUTE_SHEET, V4_PRESENCE_SHEET]
-    });
+    var action = e && e.parameter ? String(e.parameter.action || '').trim() : '';
+    if (action === 'ping') return jsonV4_({ success: true, message: 'OK', version: 4 });
+    // GET dipakai dashboard agar aman melewati redirect Web App Apps Script.
+    return dashboardV4_();
   } catch (err) {
     return jsonV4_({ success: false, message: errorMessageV4_(err) });
   }

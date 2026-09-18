@@ -51,11 +51,8 @@ export default function DashboardV4({ endpoint }: Props) {
     setError('');
     try {
       const request = async (url: string) => {
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({ action: 'getDashboardV4' }),
-        });
+        const separator = url.includes('?') ? '&' : '?';
+        const response = await fetch(`${url}${separator}action=getDashboardV4`, { method: 'GET' });
         return readApiResponse(response);
       };
       let payload;
@@ -66,7 +63,7 @@ export default function DashboardV4({ endpoint }: Props) {
         if (current === DEFAULT_V4_ENDPOINT || !/HTML|JSON|login|deployment/i.test(firstError instanceof Error ? firstError.message : String(firstError))) throw firstError;
         payload = await request(DEFAULT_V4_ENDPOINT);
       }
-      if (!payload.success) throw new Error(String(payload.message || 'Database tidak dapat dibaca.'));
+      if (!payload.success || !Array.isArray(payload.data)) throw new Error(String(payload.message || 'Database belum mengembalikan data dashboard.'));
       localStorage.setItem('eperjadin_webapp_url_v4', DEFAULT_V4_ENDPOINT);
       setRows(Array.isArray(payload.data) ? payload.data as DashboardRow[] : []);
     } catch (value) {
