@@ -29,6 +29,14 @@ function statusClass(status: string) {
   return 'bg-slate-100 text-slate-700';
 }
 
+function displayStatus(row: DashboardRow) {
+  const status = text(row, 'Status Pertanggungjawaban');
+  if (status === 'Lengkap') return 'Sudah Kirim';
+  if (status === 'Disetujui') return 'Proses Pencairan';
+  if (status === 'Belum Ditentukan' || !status) return 'Belum Lengkap';
+  return status;
+}
+
 export default function DashboardV4({ endpoint }: Props) {
   const [rows, setRows] = useState<DashboardRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -56,9 +64,9 @@ export default function DashboardV4({ endpoint }: Props) {
   }
 
   const stats = useMemo(() => {
-    const count = (status: string) => rows.filter((row) => text(row, 'Status Pertanggungjawaban') === status).length;
+    const count = (status: string) => rows.filter((row) => displayStatus(row) === status).length;
     const incomplete = rows.filter((row) => {
-      const status = text(row, 'Status Pertanggungjawaban');
+      const status = displayStatus(row);
       const geotag = text(row, 'Status Geotag');
       return ['Belum Lengkap', 'Kekurangan Dokumen'].includes(status) || geotag !== 'Lengkap' || number(row, 'Jumlah Presensi') < 4;
     });
@@ -66,7 +74,7 @@ export default function DashboardV4({ endpoint }: Props) {
   }, [rows]);
 
   const visibleRows = useMemo(() => rows.filter((row) => {
-    const status = text(row, 'Status Pertanggungjawaban');
+    const status = displayStatus(row);
     const haystack = [text(row, 'Pelaksana SPD'), text(row, 'NIP'), text(row, 'Nomor SPD'), text(row, 'Nomor ST'), text(row, 'Nama Kegiatan')].join(' ').toLowerCase();
     return (filter === 'Semua' || status === filter) && haystack.includes(query.toLowerCase());
   }), [rows, query, filter]);
@@ -104,7 +112,7 @@ export default function DashboardV4({ endpoint }: Props) {
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <h3 className="font-semibold">Pegawai yang perlu diingatkan</h3>
             <div className="mt-3 space-y-2">
-              {stats.incomplete.slice(0, 6).map((row) => <div key={`${text(row, 'Kunci SPD')}`} className="flex items-start justify-between gap-3 rounded-lg bg-amber-50 px-3 py-2 text-sm"><span><strong>{text(row, 'Pelaksana SPD') || '-'}</strong><br /><span className="text-xs text-slate-600">{text(row, 'Nomor SPD')} · {text(row, 'Status Pertanggungjawaban') || 'Belum ditentukan'}</span></span><span className="whitespace-nowrap text-xs text-amber-800">{number(row, 'Jumlah Presensi')} titik</span></div>)}
+              {stats.incomplete.slice(0, 6).map((row) => <div key={`${text(row, 'Kunci SPD')}`} className="flex items-start justify-between gap-3 rounded-lg bg-amber-50 px-3 py-2 text-sm"><span><strong>{text(row, 'Pelaksana SPD') || '-'}</strong><br /><span className="text-xs text-slate-600">{text(row, 'Nomor SPD')} · {displayStatus(row)}</span></span><span className="whitespace-nowrap text-xs text-amber-800">{number(row, 'Jumlah Presensi')} titik</span></div>)}
               {!stats.incomplete.length && <p className="text-sm text-emerald-700">Tidak ada data yang perlu ditindaklanjuti.</p>}
             </div>
           </section>
@@ -118,7 +126,7 @@ export default function DashboardV4({ endpoint }: Props) {
               <select value={filter} onChange={(event) => setFilter(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option>Semua</option>{statuses.map((status) => <option key={status}>{status}</option>)}</select>
             </div>
           </div>
-          <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[900px] text-left text-sm"><thead className="border-b bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="px-3 py-3">Pegawai</th><th className="px-3 py-3">Kegiatan / ST</th><th className="px-3 py-3">SPD</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Dokumen & presensi</th><th className="px-3 py-3 text-right">Nilai riil</th></tr></thead><tbody>{visibleRows.map((row) => { const status = text(row, 'Status Pertanggungjawaban') || 'Belum Lengkap'; const missing = text(row, 'Status Geotag') !== 'Lengkap' || number(row, 'Jumlah Presensi') < 4; return <tr key={text(row, 'Kunci SPD')} className="border-b last:border-0"><td className="px-3 py-3"><span className="inline-flex items-center gap-2 font-medium"><UserRound className="h-4 w-4 text-slate-400" />{text(row, 'Pelaksana SPD') || '-'}</span><div className="pl-6 text-xs text-slate-500">{text(row, 'NIP')}</div></td><td className="max-w-[280px] px-3 py-3"><div className="truncate">{text(row, 'Nama Kegiatan') || '-'}</div><div className="text-xs text-slate-500">{text(row, 'Nomor ST')}</div></td><td className="px-3 py-3 font-medium">{text(row, 'Nomor SPD')}</td><td className="px-3 py-3"><span className={`rounded-full px-2 py-1 text-xs font-semibold ${statusClass(status)}`}>{status}</span></td><td className="px-3 py-3 text-xs"><span className={missing ? 'text-amber-700' : 'text-emerald-700'}>{missing ? 'Perlu dilengkapi' : 'Lengkap'}</span><div className="text-slate-500">{number(row, 'Jumlah Presensi')} titik · geotag {text(row, 'Status Geotag') || '-'}</div></td><td className="px-3 py-3 text-right font-medium">{rupiah(number(row, 'Total Pengeluaran Riil'))}</td></tr>; })}</tbody></table></div>
+          <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[900px] text-left text-sm"><thead className="border-b bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="px-3 py-3">Pegawai</th><th className="px-3 py-3">Kegiatan / ST</th><th className="px-3 py-3">SPD</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Dokumen & presensi</th><th className="px-3 py-3 text-right">Nilai riil</th></tr></thead><tbody>{visibleRows.map((row) => { const status = displayStatus(row); const missing = text(row, 'Status Geotag') !== 'Lengkap' || number(row, 'Jumlah Presensi') < 4; return <tr key={text(row, 'Kunci SPD')} className="border-b last:border-0"><td className="px-3 py-3"><span className="inline-flex items-center gap-2 font-medium"><UserRound className="h-4 w-4 text-slate-400" />{text(row, 'Pelaksana SPD') || '-'}</span><div className="pl-6 text-xs text-slate-500">{text(row, 'NIP')}</div></td><td className="max-w-[280px] px-3 py-3"><div className="truncate">{text(row, 'Nama Kegiatan') || '-'}</div><div className="text-xs text-slate-500">{text(row, 'Nomor ST')}</div></td><td className="px-3 py-3 font-medium">{text(row, 'Nomor SPD')}</td><td className="px-3 py-3"><span className={`rounded-full px-2 py-1 text-xs font-semibold ${statusClass(status)}`}>{status}</span></td><td className="px-3 py-3 text-xs"><span className={missing ? 'text-amber-700' : 'text-emerald-700'}>{missing ? 'Perlu dilengkapi' : 'Lengkap'}</span><div className="text-slate-500">{number(row, 'Jumlah Presensi')} titik · geotag {text(row, 'Status Geotag') || '-'}</div></td><td className="px-3 py-3 text-right font-medium">{rupiah(number(row, 'Total Pengeluaran Riil'))}</td></tr>; })}</tbody></table></div>
           <p className="mt-3 text-xs text-slate-500">Menampilkan {visibleRows.length} dari {rows.length} SPD.</p>
         </section>
       </>}
