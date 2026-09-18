@@ -4,6 +4,7 @@ import '../index.css';
 import { budgetAccounts, findBudgetAccount } from '../data/perjadinAccounts';
 import { inferDestinationFromGeotags, selectRequiredGeotagPoints } from '../utils/geotagRules';
 import { parseEPerjadinV3 } from './parserV3';
+import DashboardV4 from './DashboardV4';
 
 const DEFAULT_WEBAPP_URL =
   'https://script.google.com/macros/s/AKfycbzR6tkMeQD2cARpMYqm6GpTszkNsXUsCLOQi_pMUaTMmBWrkSjKupSi3_iY2cIiGzd3/exec';
@@ -50,6 +51,7 @@ export default function AppV3() {
   const [saving, setSaving] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'checking' | 'ok' | 'error'>('idle');
   const [connectionMessage, setConnectionMessage] = useState('');
+  const [view, setView] = useState<'parser' | 'dashboard'>('dashboard');
 
   const parsed = useMemo(() => parseEPerjadinV3(raw), [raw]);
   const detectedDestination = useMemo(() => {
@@ -192,6 +194,22 @@ export default function AppV3() {
     }
   }
 
+  if (view === 'dashboard') {
+    return (
+      <main className="min-h-screen bg-slate-100 text-slate-950">
+        <header className="border-b border-slate-200 bg-white">
+          <div className="mx-auto max-w-7xl px-5 py-5">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-700">ePerjadin Workspace</p><h1 className="mt-1 text-2xl font-semibold">Monitoring Perjalanan Dinas</h1><p className="mt-1 text-sm text-slate-500">Dashboard internal untuk memantau proses SPD dan kelengkapan pegawai.</p></div>
+              <button type="button" onClick={() => setView('parser')} className="rounded-lg border border-blue-700 px-4 py-2 text-sm font-semibold text-blue-700">Buka input parser</button>
+            </div>
+          </div>
+        </header>
+        <div className="mx-auto max-w-7xl p-5"><DashboardV4 endpoint={endpoint} /></div>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-slate-100 text-slate-950">
       <header className="border-b border-slate-200 bg-white">
@@ -202,7 +220,7 @@ export default function AppV3() {
               <h1 className="text-2xl font-semibold">Monitoring Pertanggungjawaban Perjalanan Dinas</h1>
               <p className="mt-1 text-sm text-slate-500">Parser v4. Seluruh komponen biaya mengikuti nilai hasil copy ePerjadin.</p>
             </div>
-            <div className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-800">Schema v4</div>
+            <div className="flex items-center gap-2"><button type="button" onClick={() => setView('dashboard')} className="rounded-lg border border-blue-700 px-3 py-2 text-xs font-semibold text-blue-700">Dashboard monitoring</button><div className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-800">Schema v4</div></div>
           </div>
         </div>
       </header>
