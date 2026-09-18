@@ -6,7 +6,7 @@ type DashboardRow = Record<string, unknown>;
 
 type Props = { endpoint: string };
 
-const DEFAULT_V4_ENDPOINT = 'https://script.google.com/macros/s/AKfycbzR6tkMeQD2cARpMYqm6GpTszkNsXUsCLOQi_pMUaTMmBWrkSjKupSi3_iY2cIiGzd3/exec';
+const DEFAULT_V4_ENDPOINT = 'https://script.google.com/macros/s/AKfycbzk489Vjdh4D8bqfjM0hWUMOU-KqB5joSH40gmq_CwH6mxWxuaQhTd86L7C3LEDi-JV/exec';
 
 const statuses = ['Belum Lengkap', 'Sudah Kirim', 'Proses Pencairan', 'Selesai Pencairan', 'Kekurangan Dokumen'];
 
@@ -64,7 +64,7 @@ export default function DashboardV4({ endpoint }: Props) {
         payload = await request(DEFAULT_V4_ENDPOINT);
       }
       if (!payload.success || !Array.isArray(payload.data)) throw new Error(String(payload.message || 'Database belum mengembalikan data dashboard.'));
-      localStorage.setItem('eperjadin_webapp_url_v4', DEFAULT_V4_ENDPOINT);
+      localStorage.setItem('eperjadin_webapp_url_v5', DEFAULT_V4_ENDPOINT);
       setRows(Array.isArray(payload.data) ? payload.data as DashboardRow[] : []);
     } catch (value) {
       setError(value instanceof Error ? value.message : String(value));
