@@ -6,7 +6,7 @@ type DashboardRow = Record<string, unknown>;
 
 type Props = { endpoint: string };
 
-const DEFAULT_V4_ENDPOINT = 'https://script.google.com/macros/s/AKfycbz651X96jGdvTGaVY-GEk3uBOsjA1xAPp8WBzPlgPxZlX-tdSBDry5X88JfMZg4Ttto/exec';
+const DEFAULT_V4_ENDPOINT = 'https://script.google.com/macros/s/AKfycbxeJM9LP9dUKwdfOEEO4KShL5MOEEpC0Mte24Im7qBrofKDjUygb4-WO435Gi12Opek/exec';
 
 const statuses = ['Belum Lengkap', 'Sudah Kirim', 'Proses Pencairan', 'Selesai Pencairan', 'Kekurangan Dokumen'];
 
