@@ -7,7 +7,7 @@ import { parseEPerjadinV3 } from './parserV3';
 import DashboardV4 from './DashboardV4';
 
 const DEFAULT_WEBAPP_URL =
-  'https://script.google.com/macros/s/AKfycbxeJM9LP9dUKwdfOEEO4KShL5MOEEpC0Mte24Im7qBrofKDjUygb4-WO435Gi12Opek/exec';
+  'https://script.google.com/macros/s/AKfycbz651X96jGdvTGaVY-GEk3uBOsjA1xAPp8WBzPlgPxZlX-tdSBDry5X88JfMZg4Ttto/exec';
 const WEBAPP_STORAGE_KEY = 'eperjadin_webapp_url_v5';
 const STATUS_PERTANGGUNGJAWABAN = [
   'Belum Lengkap',
@@ -44,7 +44,10 @@ async function parseApiPayload(response: Response) {
 
 export default function AppV3() {
   const [raw, setRaw] = useState('');
-  const [endpoint, setEndpoint] = useState(() => localStorage.getItem(WEBAPP_STORAGE_KEY) || DEFAULT_WEBAPP_URL);
+  const [endpoint, setEndpoint] = useState(() => {
+    localStorage.setItem(WEBAPP_STORAGE_KEY, DEFAULT_WEBAPP_URL);
+    return DEFAULT_WEBAPP_URL;
+  });
   const [kodeAkun, setKodeAkun] = useState('');
   const [statusPJ, setStatusPJ] = useState<StatusPertanggungjawaban>('Belum Lengkap');
   const [message, setMessage] = useState('');
