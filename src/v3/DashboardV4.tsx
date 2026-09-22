@@ -88,20 +88,25 @@ export default function DashboardV4({ endpoint }: Props) {
 
   async function saveEdit() {
     if (!editingRow) return;
+    const key = text(editingRow, 'Kunci SPD');
+    const previousRows = rows;
+    const optimisticRow = { ...editingRow, 'Status Pertanggungjawaban': editStatus, 'Kekurangan Dokumen': editMissing };
     setSavingEdit(true);
     setEditMessage('');
+    setRows((current) => current.map((row) => text(row, 'Kunci SPD') === key ? optimisticRow : row));
+    setEditingRow(null);
     try {
       const response = await fetch(endpoint.trim() || DEFAULT_V4_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'updateStatusV4', kunciSPD: text(editingRow, 'Kunci SPD'), status: editStatus, kekuranganDokumen: editMissing }),
+        body: JSON.stringify({ action: 'updateStatusV4', kunciSPD: key, status: editStatus, kekuranganDokumen: editMissing }),
       });
       const payload = await readApiResponse(response);
       if (!payload.success) throw new Error(String(payload.message || 'Perubahan belum tersimpan.'));
-      await load();
-      setEditingRow(null);
+      setError('');
     } catch (value) {
-      setEditMessage(value instanceof Error ? value.message : String(value));
+      setRows(previousRows);
+      setError(value instanceof Error ? value.message : String(value));
     } finally {
       setSavingEdit(false);
     }
