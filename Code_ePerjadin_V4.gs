@@ -5,13 +5,14 @@ const V4_COMPONENT_SHEET = 'EPERJADIN_KOMPONEN';
 const V4_ROUTE_SHEET = 'EPERJADIN_RUTE';
 const V4_PRESENCE_SHEET = 'EPERJADIN_PRESENSI';
 const ACCOUNT_SHEET = 'AKUN_ANGGARAN';
+const DRIVE_FOLDER_NAME_V4 = 'E-Perjadin Dokumen';
 
 const V4_SUMMARY_HEADERS = [
   'Kunci SPD','ID Kegiatan','Nama Kegiatan','Nomor ST','Lampiran ST','Nomor Kegiatan',
   'DIPA Inisiator','PPK','Pelaksana SPD','NIP','Nomor SPD','Nomor Perjalanan',
   'Jumlah Rute','Tujuan Utama','Tanggal Mulai','Tanggal Selesai','Durasi Hari','Menginap',
   'Uang Muka','Total Pengeluaran Riil','Total Komponen Dikirim','Selisih Komponen',
-  'Status Validasi','Kode Akun','Nama Akun','Status Pertanggungjawaban','Status Geotag',
+  'Status Validasi','Kode Akun','Nama Akun','Status Pertanggungjawaban','Status Geotag','Kekurangan Dokumen','Dokumen Pendukung',
   'Jumlah Presensi','START','CLOCK IN','CLOCK OUT','END','Detail Geotag','Tanggal Input',
   'Sumber Data','Waktu Rekam Sumber','Schema Version','Raw Hash'
 ];
@@ -66,6 +67,8 @@ function doPost(e) {
     if (action === 'deletePerjadinV4') {
       return deletePerjadinV4_(body.kunciSPD || (body.row && body.row.kunciSPD) || '');
     }
+    if (action === 'updateStatusV4') return updateStatusV4_(body);
+    if (action === 'uploadDocumentV4') return uploadDocumentV4_(body);
 
     return jsonV4_({ success: false, message: 'Action tidak dikenali: ' + action });
   } catch (err) {
@@ -266,6 +269,8 @@ function buildSummaryObjectV4_(r) {
     'Nama Akun': r.namaAkun,
     'Status Pertanggungjawaban': r.statusPJ,
     'Status Geotag': r.statusGeotag,
+    'Kekurangan Dokumen': r.kekuranganDokumen,
+    'Dokumen Pendukung': r.dokumenPendukung,
     'Jumlah Presensi': r.geotags.length,
     'START': r.start,
     'CLOCK IN': r.clockIn,
@@ -278,6 +283,56 @@ function buildSummaryObjectV4_(r) {
     'Schema Version': r.schemaVersion,
     'Raw Hash': r.rawHash
   };
+}
+
+function updateStatusV4_(input) {
+  const key = textV4_(input.kunciSPD);
+  if (!key) return jsonV4_({ success: false, message: 'Kunci SPD wajib ada.' });
+  const ss = ssV4_();
+  const sh = ensureSheetV4_(ss, V4_SUMMARY_SHEET, V4_SUMMARY_HEADERS);
+  const map = headerMapV4_(sh);
+  const row = findRowByValueV4_(sh, 'Kunci SPD', key);
+  if (!row) return jsonV4_({ success: false, message: 'SPD tidak ditemukan.' });
+  if (input.status !== undefined && map['Status Pertanggungjawaban'] !== undefined) sh.getRange(row, map['Status Pertanggungjawaban'] + 1).setValue(textV4_(input.status));
+  if (input.kekuranganDokumen !== undefined && map['Kekurangan Dokumen'] !== undefined) sh.getRange(row, map['Kekurangan Dokumen'] + 1).setValue(textV4_(input.kekuranganDokumen));
+  return jsonV4_({ success: true, message: 'Monitoring SPD diperbarui.', kunciSPD: key });
+}
+
+function uploadDocumentV4_(input) {
+  const key = textV4_(input.kunciSPD);
+  const fileName = textV4_(input.fileName);
+  const mimeType = textV4_(input.mimeType) || 'application/octet-stream';
+  const base64 = textV4_(input.base64);
+  if (!key || !fileName || !base64) return jsonV4_({ success: false, message: 'SPD, nama file, dan isi file wajib ada.' });
+  const folder = getDriveFolderV4_();
+  const bytes = Utilities.base64Decode(base64);
+  const blob = Utilities.newBlob(bytes, mimeType, key.replace(/[^a-zA-Z0-9_-]/g, '_') + '_' + fileName);
+  const file = folder.createFile(blob);
+  file.setDescription('Dokumen pendukung E-Perjadin - ' + key);
+  const sh = ensureSheetV4_(ssV4_(), V4_SUMMARY_SHEET, V4_SUMMARY_HEADERS);
+  const row = findRowByValueV4_(sh, 'Kunci SPD', key);
+  if (row) {
+    const map = headerMapV4_(sh);
+    const cell = sh.getRange(row, map['Dokumen Pendukung'] + 1);
+    const previous = textV4_(cell.getValue());
+    cell.setValue(previous ? previous + ' | ' + file.getUrl() : file.getUrl());
+  }
+  return jsonV4_({ success: true, message: 'Dokumen berhasil diunggah ke Google Drive.', url: file.getUrl(), name: file.getName() });
+}
+
+function getDriveFolderV4_() {
+  const folders = DriveApp.getFoldersByName(DRIVE_FOLDER_NAME_V4);
+  return folders.hasNext() ? folders.next() : DriveApp.createFolder(DRIVE_FOLDER_NAME_V4);
+}
+
+function findRowByValueV4_(sh, headerName, value) {
+  if (!sh || sh.getLastRow() <= 1) return 0;
+  const map = headerMapV4_(sh);
+  const index = map[headerName];
+  if (index === undefined) return 0;
+  const values = sh.getRange(2, index + 1, sh.getLastRow() - 1, 1).getValues();
+  for (let i = 0; i < values.length; i++) if (textV4_(values[i][0]) === value) return i + 2;
+  return 0;
 }
 
 function buildComponentObjectV4_(parent, item, index) {
