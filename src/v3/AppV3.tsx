@@ -7,7 +7,7 @@ import { parseEPerjadinV3 } from './parserV3';
 import DashboardV4 from './DashboardV4';
 
 const DEFAULT_WEBAPP_URL =
-  'https://script.google.com/macros/s/AKfycbzk489Vjdh4D8bqfjM0hWUMOU-KqB5joSH40gmq_CwH6mxWxuaQhTd86L7C3LEDi-JV/exec';
+  'https://script.google.com/macros/s/AKfycbz651X96jGdvTGaVY-GEk3uBOsjA1xAPp8WBzPlgPxZlX-tdSBDry5X88JfMZg4Ttto/exec';
 const WEBAPP_STORAGE_KEY = 'eperjadin_webapp_url_v5';
 const STATUS_PERTANGGUNGJAWABAN = [
   'Belum Lengkap',
