@@ -5,7 +5,7 @@ const V4_COMPONENT_SHEET = 'EPERJADIN_KOMPONEN';
 const V4_ROUTE_SHEET = 'EPERJADIN_RUTE';
 const V4_PRESENCE_SHEET = 'EPERJADIN_PRESENSI';
 const ACCOUNT_SHEET = 'AKUN_ANGGARAN';
-const DRIVE_FOLDER_NAME_V4 = 'E-Perjadin Dokumen';
+const DRIVE_FOLDER_ID_V4 = '1i0Ik4ZQ3AnyDBagJ-N0imljCusrBDVm0';
 
 const V4_SUMMARY_HEADERS = [
   'Kunci SPD','ID Kegiatan','Nama Kegiatan','Nomor ST','Lampiran ST','Nomor Kegiatan',
@@ -321,8 +321,7 @@ function uploadDocumentV4_(input) {
 }
 
 function getDriveFolderV4_() {
-  const folders = DriveApp.getFoldersByName(DRIVE_FOLDER_NAME_V4);
-  return folders.hasNext() ? folders.next() : DriveApp.createFolder(DRIVE_FOLDER_NAME_V4);
+  return DriveApp.getFolderById(DRIVE_FOLDER_ID_V4);
 }
 
 function findRowByValueV4_(sh, headerName, value) {
