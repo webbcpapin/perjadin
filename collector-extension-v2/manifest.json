@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Kolektor ePerjadin V2.1 (Lokal)",
-  "version": "2.1.0",
-  "description": "Membaca daftar dan detail SPD lewat sesi pengguna aktif, menyimpan data lokal dan membandingkan perubahan.",
+  "name": "Kolektor ePerjadin V2.2 (Lokal)",
+  "version": "2.2.0",
+  "description": "Ekstraksi lokal SPD, validasi presensi kosong, dan indeks status laporan kegiatan.",
   "permissions": [
     "activeTab",
     "storage",
