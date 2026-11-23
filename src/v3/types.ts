@@ -21,6 +21,7 @@ export interface CostComponentV4 {
   nama: string;
   status: string;
   nilaiRiil: number;
+  nilaiRiilTerbaca?: boolean;
   nilaiSBM?: number;
   buktiDukung?: string[];
   keterangan?: string;
@@ -50,6 +51,7 @@ export interface ParsedPerjadinV3 {
   statusUangHarian: string;
   uangMuka: number;
   totalPengeluaranRiil: number;
+  totalPengeluaranRiilResmi: number | null;
   nilaiSBMAwal: number;
   totalNilaiSBM: number;
   totalNilaiRiil: number;

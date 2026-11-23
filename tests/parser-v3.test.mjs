@@ -30,6 +30,37 @@ function load(file) {
 }
 
 const { parseEPerjadinV3 } = load(path.join(root, 'v3/parserV3.ts'));
+const { selectRequiredGeotagPoints } = load(path.join(root, 'utils/geotagRules.ts'));
+
+test('identical amounts from separate routes are preserved and Draft is separate from the official total', () => {
+  const route = (n) => [
+    'Rute ' + n, 'Kab. Bangka', '7 September 2026 (1 Hari)',
+    'Uang Harian', 'Disetujui PPK', 'Total Nilai Riil', 'Rp200.000,00',
+    'Biaya Tiket Pesawat', 'Draft', 'Total Nilai Riil', 'Rp500.000,00',
+  ].join('\n');
+  const raw = ['Detail Pertanggungjawaban', 'Nama Kegiatan\tKegiatan Uji', 'ID Kegiatan\tabcdef01',
+    'Pada Perjalanan Dinas ini terdapat 2 Rute', route(1), route(2), 'Ringkasan',
+    'Pelaksana SPD\tPetugas Uji', 'Nomor SPD\tSPD-55/123456-2026'].join('\n');
+  const parsed = parseEPerjadinV3(raw + '\nTotal Pengeluaran Riil\tRp400.000,00');
+  assert.equal(parsed.idKegiatan, 'abcdef01');
+  assert.equal(parsed.routes.length, 2);
+  assert.equal(parsed.totalPengeluaranRiilResmi, 400000);
+  assert.equal(parsed.components.map((item) => item.nomorRute).join(','), '1,1,2,2');
+  assert.equal(parsed.components.filter((item) => item.status === 'Disetujui').reduce((sum, item) => sum + item.nilaiRiil, 0), 400000);
+  assert.equal(parseEPerjadinV3(raw).totalPengeluaranRiilResmi, null);
+});
+
+test('four geotag records with incorrect order or reused timestamps are not complete', () => {
+  const point = (waktuTagging, wilayahTagging) => ({
+    hariTanggal: '07-09-2026', waktuTagging, wilayahTagging, lokasiTagging: wilayahTagging,
+  });
+  const itinerary = ['07-09-2026', 'Kab. Bangka'];
+  const valid = [point('08:00', 'Pangkalpinang'), point('09:00', 'Kab. Bangka'),
+    point('15:00', 'Kab. Bangka'), point('17:00', 'Pangkalpinang')];
+  assert.equal(selectRequiredGeotagPoints(valid, ...itinerary).status, 'Lengkap');
+  assert.equal(selectRequiredGeotagPoints([point('10:00', 'Pangkalpinang'), ...valid.slice(1)], ...itinerary).status, 'Tidak Sesuai');
+  assert.equal(selectRequiredGeotagPoints([valid[0], valid[1], valid[1], valid[3]], ...itinerary).status, 'Tidak Sesuai');
+});
 
 const dailyOnlySample = `Detail Pertanggungjawaban
 Nama Kegiatan

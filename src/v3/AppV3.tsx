@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react';
 import { CheckCircle2, ClipboardPaste, Database, MapPin, RefreshCw, Save, ShieldAlert, WalletCards } from 'lucide-react';
 import '../index.css';
 import { budgetAccounts, findBudgetAccount } from '../data/perjadinAccounts';
-import { inferDestinationFromGeotags, selectRequiredGeotagPoints } from '../utils/geotagRules';
+import { selectRequiredGeotagPoints } from '../utils/geotagRules';
+import { appsScriptEndpoint, verifyV5Endpoint } from './apiClient';
 import { parseEPerjadinV3 } from './parserV3';
 import DashboardV4 from './DashboardV4';
 import BatchImportV2 from './BatchImportV2';
@@ -46,10 +47,7 @@ async function parseApiPayload(response: Response) {
 
 export default function AppV3() {
   const [raw, setRaw] = useState('');
-  const [endpoint, setEndpoint] = useState(() => {
-    localStorage.setItem(WEBAPP_STORAGE_KEY, DEFAULT_WEBAPP_URL);
-    return DEFAULT_WEBAPP_URL;
-  });
+  const [endpoint, setEndpoint] = useState(() => localStorage.getItem(WEBAPP_STORAGE_KEY) || DEFAULT_WEBAPP_URL);
   const [kodeAkun, setKodeAkun] = useState('');
   const [statusPJ, setStatusPJ] = useState<StatusPertanggungjawaban>('Belum Lengkap');
   const [message, setMessage] = useState('');
@@ -63,13 +61,10 @@ export default function AppV3() {
   function changeClientId(value: string) { localStorage.setItem('eperjadin_oauth_client_id', value); setGoogleClientId(value); }
 
   const parsed = useMemo(() => parseEPerjadinV3(raw), [raw]);
-  const detectedDestination = useMemo(() => {
-    if (!parsed) return '';
-    return parsed.tujuan || inferDestinationFromGeotags(parsed.geotags, parsed.tanggalKegiatan);
-  }, [parsed]);
+  const detectedDestination = parsed?.tujuan || '';
 
   const geotag = useMemo(() => {
-    if (!parsed) return null;
+    if (!parsed || parsed.jumlahRute !== 1 || !detectedDestination || !parsed.tanggalKegiatan) return null;
     return selectRequiredGeotagPoints(parsed.geotags, parsed.tanggalKegiatan, detectedDestination);
   }, [parsed, detectedDestination]);
 
@@ -81,10 +76,13 @@ export default function AppV3() {
       .filter((item) => /^(Dikirim|Disetujui|Dibayar|Selesai)$/i.test(item.status))
       .reduce((sum, item) => sum + item.nilaiRiil, 0);
   }, [parsed]);
-  const sourceTotal = parsed?.totalPengeluaranRiil || totalKomponenDikirim || 0;
+  const officialTotal = parsed?.totalPengeluaranRiilResmi ?? null;
+  const sourceTotal = officialTotal ?? 0;
   const componentDelta = sourceTotal - totalKomponenDikirim;
   const uangHarian = parsed?.components.find((item) => /^Uang Harian\b/i.test(item.nama))?.nilaiRiil || 0;
-  const ready = Boolean(parsed?.idKegiatan && parsed?.nomorST && parsed?.peserta && parsed?.nomorSPD && sourceTotal > 0 && parsed.components.length > 0 && Math.abs(componentDelta) < 1 && account);
+  const ready = Boolean(parsed?.idKegiatan && parsed?.nomorST && parsed?.peserta && parsed?.nomorSPD &&
+    officialTotal !== null && parsed.routes.length === parsed.jumlahRute && parsed.components.length > 0 &&
+    parsed.components.every((item) => item.nilaiRiilTerbaca) && Math.round(componentDelta * 100) === 0 && account);
 
   async function validateConnection() {
     const url = endpoint.trim();
@@ -96,7 +94,7 @@ export default function AppV3() {
     setConnectionStatus('checking');
     setConnectionMessage('Memeriksa koneksi database...');
     try {
-      const response = await fetch(url, {
+      const response = await fetch(googleIdToken ? await verifyV5Endpoint(url) : appsScriptEndpoint(url), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ action: 'getDashboardV4', authIdToken: googleIdToken }),
@@ -123,9 +121,8 @@ export default function AppV3() {
     if (!parsed) return setMessage('Data belum terbaca. Paste Detail Pertanggungjawaban ePerjadin terlebih dahulu.');
     if (!account) return setMessage('Akun belum teridentifikasi. Pilih akun yang benar sebelum menyimpan.');
     if (!parsed.nomorSPD) return setMessage('Nomor SPD belum terbaca. Data tidak disimpan.');
-    if (!sourceTotal) return setMessage('Total Pengeluaran Riil belum terbaca. Data tidak disimpan.');
-    if (!parsed.components.length) return setMessage('Komponen biaya belum terbaca. Perbaiki data parsing sebelum menyimpan.');
-    if (Math.abs(componentDelta) >= 1) return setMessage('Total komponen belum sesuai dengan Total Pengeluaran Riil. Data tidak disimpan.');
+    if (officialTotal === null) return setMessage('Total Pengeluaran Riil belum terbaca.');
+    if (!ready) return setMessage('Periksa identitas, rute, komponen biaya, dan kecocokan dengan total resmi.');
 
     const points = geotag?.points || {};
     const detailGeotag = parsed.geotags
@@ -158,7 +155,7 @@ export default function AppV3() {
       kodeAkun: account.kode,
       namaAkun: account.nama,
       statusPJ,
-      statusGeotag: geotag?.status || 'Belum Dinilai',
+      statusGeotag: geotag?.status || 'Perlu Verifikasi',
       start: points.start ? `${points.start.hariTanggal} ${points.start.waktuTagging} ${points.start.wilayahTagging}` : '',
       clockIn: points.clockIn ? `${points.clockIn.hariTanggal} ${points.clockIn.waktuTagging} ${points.clockIn.wilayahTagging}` : '',
       clockOut: points.clockOut ? `${points.clockOut.hariTanggal} ${points.clockOut.waktuTagging} ${points.clockOut.wilayahTagging}` : '',
@@ -186,7 +183,8 @@ export default function AppV3() {
     setMessage('');
     try {
       localStorage.setItem(WEBAPP_STORAGE_KEY, endpoint.trim());
-      const response = await fetch(endpoint.trim(), {
+      const url = googleIdToken ? await verifyV5Endpoint(endpoint) : appsScriptEndpoint(endpoint);
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ action: 'upsertPerjadinV4', row, authIdToken: googleIdToken }),

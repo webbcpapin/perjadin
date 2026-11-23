@@ -4,6 +4,24 @@ export type ApiPayload = {
   [key: string]: unknown;
 };
 
+export function appsScriptEndpoint(endpoint: string) {
+  const url = new URL(endpoint.trim());
+  if (url.origin !== 'https://script.google.com' || url.username || url.password || url.search || url.hash ||
+      !/^\/macros\/s\/[\w-]+\/exec$/.test(url.pathname)) {
+    throw new Error('Masukkan URL Web App Apps Script /exec yang dikelola administrator.');
+  }
+  return url.toString();
+}
+
+export async function verifyV5Endpoint(endpoint: string) {
+  const url = appsScriptEndpoint(endpoint);
+  const payload = await readApiResponse(await fetch(url + '?action=ping', { cache: 'no-store' }));
+  if (!payload.success || payload.version !== 5 || payload.authRequired !== true) {
+    throw new Error('URL belum mengarah ke backend V5 yang mewajibkan autentikasi.');
+  }
+  return url;
+}
+
 function htmlMessage(text: string) {
   const lower = text.toLowerCase();
   if (lower.includes('accounts.google.com') || lower.includes('sign in') || lower.includes('login')) {

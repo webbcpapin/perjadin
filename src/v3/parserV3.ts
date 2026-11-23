@@ -31,7 +31,7 @@ function textLines(text: string) {
   return text
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
-    .split('\n')
+    .split(/[\n\t]/)
     .map(cleanMarkdown)
     .filter(Boolean)
     .filter((line) => !/^[-:| ]+$/.test(line));
@@ -83,12 +83,11 @@ function currencyAfterLabel(lines: string[], label: RegExp, maxLookahead = 5) {
   for (let i = 0; i < lines.length; i++) {
     if (!label.test(lines[i])) continue;
     for (let j = i; j < lines.length && j <= i + maxLookahead; j++) {
-      const value = parseRupiah(lines[j]);
-      if (value || /Rp\s*0(?:[.,]0+)?/i.test(lines[j])) return value;
       if (j > i && isFieldLabel(lines[j]) && !label.test(lines[j])) break;
+      if (/Rp\s*[\d.,]+/i.test(lines[j])) return parseRupiah(lines[j]);
     }
   }
-  return 0;
+  return null;
 }
 
 function numberAfterLabel(lines: string[], label: RegExp) {
@@ -192,7 +191,11 @@ function normalizeComponentStatus(value: string) {
 
 function parseComponents(lines: string[]): CostComponentV4[] {
   const components: CostComponentV4[] = [];
+  let nomorRute = 1;
   for (let i = 0; i < lines.length; i++) {
+    const route = lines[i].match(/^Rute\s+(\d+)$/i);
+    if (route) { nomorRute = Number(route[1]); continue; }
+    if (/^(Ringkasan|Log Data Presensi)$/i.test(lines[i])) break;
     if (!COMPONENT_STATUS_RE.test(lines[i])) continue;
 
     const status = normalizeComponentStatus(lines[i]);
@@ -207,7 +210,7 @@ function parseComponents(lines: string[]): CostComponentV4[] {
     }
     if (!name) continue;
 
-    let nilaiRiil = 0;
+    let nilaiRiil: number | undefined;
     for (let j = i + 1; j < lines.length && j <= i + 6; j++) {
       if (/^Total Nilai Riil$/i.test(lines[j])) {
         for (let k = j + 1; k < lines.length && k <= j + 3; k++) {
@@ -221,9 +224,7 @@ function parseComponents(lines: string[]): CostComponentV4[] {
       if (COMPONENT_STATUS_RE.test(lines[j])) break;
     }
 
-    const key = `${name}|${status}|${nilaiRiil}`.toLowerCase();
-    if (components.some((item) => `${item.nama}|${item.status}|${item.nilaiRiil}`.toLowerCase() === key)) continue;
-    components.push({ nomorRute: 1, nama: name, status, nilaiRiil });
+    components.push({ nomorRute, nama: name, status, nilaiRiil: nilaiRiil ?? 0, nilaiRiilTerbaca: nilaiRiil !== undefined });
   }
   return components;
 }
@@ -385,10 +386,10 @@ export function parseEPerjadinV3(text: string): ParsedPerjadinV3 | null {
       valueByInlinePrefix(lines, /^DIPA Inisiator\s*\(([^)]+)\)$/i),
   );
   const ppk = valueAfterLabel(lines, /^PPK$/i);
-  const uangMuka = currencyAfterLabel(lines, /^Uang Muka$/i);
+  const uangMuka = currencyAfterLabel(lines, /^Uang Muka$/i) ?? 0;
   const totalPengeluaranRiil = currencyAfterLabel(lines, /^Total Pengeluaran Riil$/i);
-  const nilaiSBMAwal = currencyAfterLabel(lines, /^Nilai SBM Awal$/i);
-  const totalNilaiSBM = currencyAfterLabel(lines, /^Total Nilai SBM$/i);
+  const nilaiSBMAwal = currencyAfterLabel(lines, /^Nilai SBM Awal$/i) ?? 0;
+  const totalNilaiSBM = currencyAfterLabel(lines, /^Total Nilai SBM$/i) ?? 0;
   const efisiensi = numberAfterLabel(lines, /^Efisiensi$/i);
   const durationFromLabel = numberAfterLabel(lines, /^Durasi Perjalanan$/i);
   const lampiran = valueAfterLabel(lines, /^Lampiran ST$/i);
@@ -421,10 +422,11 @@ export function parseEPerjadinV3(text: string): ParsedPerjadinV3 | null {
     menginap,
     statusUangHarian: uangHarian?.status || '',
     uangMuka,
-    totalPengeluaranRiil: totalPengeluaranRiil || totalDikirim,
+    totalPengeluaranRiil: totalPengeluaranRiil ?? totalDikirim,
+    totalPengeluaranRiilResmi: totalPengeluaranRiil,
     nilaiSBMAwal,
     totalNilaiSBM,
-    totalNilaiRiil: totalPengeluaranRiil || totalDikirim,
+    totalNilaiRiil: totalPengeluaranRiil ?? totalDikirim,
     efisiensi,
     kodeAkun: extractAccountCode(text),
     routes: routes.map((route) => ({ ...route, menginap })),

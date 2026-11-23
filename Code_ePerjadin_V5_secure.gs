@@ -1,11 +1,8 @@
-const SPREADSHEET_ID = '1fkXASbZbnPCZeW2FSxteE-oOnacVuJRCxQ8zWOgPRh8';
-
 const V4_SUMMARY_SHEET = 'EPERJADIN_V4';
 const V4_COMPONENT_SHEET = 'EPERJADIN_KOMPONEN';
 const V4_ROUTE_SHEET = 'EPERJADIN_RUTE';
 const V4_PRESENCE_SHEET = 'EPERJADIN_PRESENSI';
 const ACCOUNT_SHEET = 'AKUN_ANGGARAN';
-const DRIVE_FOLDER_ID_V4 = '1i0Ik4ZQ3AnyDBagJ-N0imljCusrBDVm0';
 
 const V4_SUMMARY_HEADERS = [
   'Kunci SPD','ID Kegiatan','Nama Kegiatan','Nomor ST','Lampiran ST','Nomor Kegiatan',
@@ -34,7 +31,9 @@ const V4_PRESENCE_HEADERS = [
 ];
 
 function ssV4_() {
-  return SpreadsheetApp.openById(SPREADSHEET_ID);
+  const id = PropertiesService.getScriptProperties().getProperty('EPERJADIN_SPREADSHEET_ID');
+  if (!id) throw new Error('Target spreadsheet V5 belum dikonfigurasi.');
+  return SpreadsheetApp.openById(id);
 }
 
 /**
@@ -58,9 +57,14 @@ function verifyGoogleIdentityV5_(idToken) {
   const cached = cache.get(key);
   if (cached) info = JSON.parse(cached);
   else {
-    const response = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(token), {
-      method: 'get', muteHttpExceptions: true, followRedirects: false
-    });
+    let response;
+    try {
+      response = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(token), {
+        method: 'get', muteHttpExceptions: true, followRedirects: false
+      });
+    } catch (_) {
+      throw new Error('Verifikasi sesi Google tidak tersedia. Coba kembali.');
+    }
     if (response.getResponseCode() !== 200) throw new Error('Sesi Google tidak berlaku. Silakan masuk kembali.');
     info = JSON.parse(response.getContentText() || '{}');
   }
@@ -72,7 +76,9 @@ function verifyGoogleIdentityV5_(idToken) {
   }
   const email = String(info.email || '').toLowerCase().trim();
   if (!email || allow.indexOf(email) < 0) throw new Error('Akun Google tidak terdaftar sebagai petugas ePerjadin.');
-  if (Number(info.exp || 0) <= Math.floor(Date.now() / 1000)) throw new Error('Sesi Google berakhir. Masuk kembali.');
+  if (!Number.isFinite(Number(info.exp)) || Number(info.exp) <= Math.floor(Date.now() / 1000)) {
+    throw new Error('Sesi Google berakhir. Masuk kembali.');
+  }
   if (!cached) cache.put(key, JSON.stringify(info), Math.max(1, Math.min(240, Number(info.exp) - Math.floor(Date.now() / 1000))));
   return email;
 }
@@ -89,8 +95,14 @@ function doPost(e) {
     const action = String(body.action || '').trim();
     if (action === 'ping') return jsonV4_({ success: true, version: 5, authRequired: true });
     verifyGoogleIdentityV5_(body.authIdToken);
-    setupEperjadinV4();
     if (action === 'getDashboard' || action === 'getDashboardV4') return dashboardV4_();
+    if (action === 'upsertPilotV5') {
+      if (body.expectedPreviousHash !== null &&
+          (typeof body.expectedPreviousHash !== 'string' || !body.expectedPreviousHash.trim())) {
+        return jsonV4_({ success: false, version: 5, message: 'Snapshot dan konfirmasi SPD wajib tersedia.' });
+      }
+      return upsertPerjadinV4_(body.row, body.expectedPreviousHash);
+    }
     if (action === 'upsertPerjadin' || action === 'upsertPerjadinV4') return upsertPerjadinV4_(body.row || body.payload || {});
     if (action === 'deletePerjadinV4') return jsonV4_({ success: false, message: 'Hapus SPD dari web dibatasi pada V5. Gunakan peninjauan administrator.' });
     if (action === 'updateStatusV4') return updateStatusV4_(body);
@@ -115,18 +127,13 @@ function ensureSheetV4_(ss, name, headers) {
   if (!sh) sh = ss.insertSheet(name);
 
   const currentCols = Math.max(sh.getLastColumn(), headers.length, 1);
-  const existing = sh.getLastRow() > 0
-    ? sh.getRange(1, 1, 1, currentCols).getValues()[0]
-    : [];
-
-  let needsHeader = sh.getLastRow() === 0;
-  if (!needsHeader) {
-    const existingNames = existing.map(function(v) { return String(v || '').trim(); });
-    needsHeader = headers.some(function(h) { return existingNames.indexOf(h) === -1; });
-  }
-
-  if (needsHeader) {
+  if (sh.getLastRow() === 0) {
     sh.getRange(1, 1, 1, headers.length).setValues([headers]);
+  } else {
+    const existing = sh.getRange(1, 1, 1, currentCols).getValues()[0];
+    if (headers.some(function(header, i) { return textV4_(existing[i]) !== header; })) {
+      throw new Error('Header tab ' + name + ' berbeda dari skema V5. Tinjau salinan migrasi.');
+    }
   }
 
   const header = sh.getRange(1, 1, 1, headers.length);
@@ -137,10 +144,14 @@ function ensureSheetV4_(ss, name, headers) {
 
 function dashboardV4_() {
   const ss = ssV4_();
+  const summary = ss.getSheetByName(V4_SUMMARY_SHEET);
+  if (!summary || headerMapV4_(summary)['Kunci SPD'] === undefined) {
+    throw new Error('Tab Master belum disiapkan administrator.');
+  }
   return jsonV4_({
     success: true,
     version: 5,
-    data: readSheetObjectsV4_(ss.getSheetByName(V4_SUMMARY_SHEET)),
+    data: readSheetObjectsV4_(summary),
     components: readSheetObjectsV4_(ss.getSheetByName(V4_COMPONENT_SHEET)),
     routes: readSheetObjectsV4_(ss.getSheetByName(V4_ROUTE_SHEET)),
     presences: readSheetObjectsV4_(ss.getSheetByName(V4_PRESENCE_SHEET)),
@@ -148,7 +159,7 @@ function dashboardV4_() {
   });
 }
 
-function upsertPerjadinV4_(input) {
+function upsertPerjadinV4_(input, expectedPreviousHash) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
 
@@ -167,20 +178,36 @@ function upsertPerjadinV4_(input) {
     const componentSheet = ss.getSheetByName(V4_COMPONENT_SHEET);
     const routeSheet = ss.getSheetByName(V4_ROUTE_SHEET);
     const presenceSheet = ss.getSheetByName(V4_PRESENCE_SHEET);
+    if (!summarySheet || !componentSheet || !routeSheet || !presenceSheet) {
+      throw new Error('Tab Master belum disiapkan administrator.');
+    }
+    [[summarySheet, V4_SUMMARY_HEADERS], [componentSheet, V4_COMPONENT_HEADERS],
+      [routeSheet, V4_ROUTE_HEADERS], [presenceSheet, V4_PRESENCE_HEADERS]].forEach(function(pair) {
+      const map = headerMapV4_(pair[0]);
+      if (pair[1].some(function(header, i) { return map[header] !== i; })) {
+        throw new Error('Urutan header Master berbeda dari skema V5.');
+      }
+    });
 
     // Catatan monitoring yang dimasukkan manusia tetap dipertahankan saat sumber disinkron ulang.
-    const priorRow = findRowByValueV4_(summarySheet, 'Kunci SPD', normalized.kunciSPD);
+    const priorRows = findRowsByKeyV5_(summarySheet, normalized.kunciSPD);
+    if (priorRows.length > 1) throw new Error('Kunci SPD ganda. Periksa Master sebelum melanjutkan.');
+    const priorRow = priorRows[0] || 0;
+    if (expectedPreviousHash === null && priorRow || typeof expectedPreviousHash === 'string' && !priorRow) {
+      throw new Error('Master berubah setelah diperiksa. Bandingkan kembali.');
+    }
+    if (expectedPreviousHash !== undefined) validatePilotInputV5_(input, normalized);
     if (priorRow) {
       const map = headerMapV4_(summarySheet);
       const old = summarySheet.getRange(priorRow, 1, 1, summarySheet.getLastColumn()).getValues()[0];
       const getOld = function(name) { return map[name] === undefined ? '' : textV4_(old[map[name]]); };
+      if (typeof expectedPreviousHash === 'string' && getOld('Raw Hash') !== expectedPreviousHash) {
+        throw new Error('Master berubah setelah diperiksa. Bandingkan kembali.');
+      }
       normalized.statusPJ = getOld('Status Pertanggungjawaban') || normalized.statusPJ;
       normalized.kekuranganDokumen = getOld('Kekurangan Dokumen') || normalized.kekuranganDokumen;
       normalized.dokumenPendukung = getOld('Dokumen Pendukung') || normalized.dokumenPendukung;
     }
-
-    const summaryRow = buildSummaryObjectV4_(normalized);
-    const targetRow = upsertObjectByKeyV4_(summarySheet, V4_SUMMARY_HEADERS, 'Kunci SPD', normalized.kunciSPD, summaryRow);
 
     replaceChildrenV4_(componentSheet, V4_COMPONENT_HEADERS, 'Kunci SPD', normalized.kunciSPD,
       normalized.components.map(function(item, index) {
@@ -200,6 +227,8 @@ function upsertPerjadinV4_(input) {
       })
     );
 
+    const summaryRow = buildSummaryObjectV4_(normalized);
+    const targetRow = upsertObjectByKeyV4_(summarySheet, V4_SUMMARY_HEADERS, 'Kunci SPD', normalized.kunciSPD, summaryRow, priorRow);
     applySummaryFormulasV4_(summarySheet, targetRow);
     SpreadsheetApp.flush();
 
@@ -227,7 +256,7 @@ function upsertPerjadinV4_(input) {
 function normalizePayloadV4_(r) {
   const idKegiatan = textV4_(r.idKegiatan);
   const nomorSPD = textV4_(r.nomorSPD || r.nka);
-  const kunciSPD = textV4_(r.kunciSPD) || (normalizeKeyV4_(idKegiatan) + '|' + normalizeKeyV4_(nomorSPD));
+  const kunciSPD = normalizeKeyV4_(idKegiatan) + '|' + normalizeKeyV4_(nomorSPD);
   const routes = Array.isArray(r.routes) ? r.routes : [];
   const geotags = Array.isArray(r.geotags) ? r.geotags : [];
   const components = Array.isArray(r.components) ? r.components : [];
@@ -359,7 +388,33 @@ function uploadDocumentV4_(input) {
 }
 
 function getDriveFolderV4_() {
-  return DriveApp.getFolderById(DRIVE_FOLDER_ID_V4);
+  const id = PropertiesService.getScriptProperties().getProperty('EPERJADIN_DRIVE_FOLDER_ID');
+  if (!id) throw new Error('Folder dokumen V5 belum dikonfigurasi.');
+  return DriveApp.getFolderById(id);
+}
+
+function validatePilotInputV5_(input, row) {
+  if (!row.components.length || !row.routes.length || row.routes.length !== row.jumlahRute || !row.kodeAkun ||
+      typeof input.totalPengeluaranRiil !== 'number' || !Number.isFinite(input.totalPengeluaranRiil) ||
+      input.totalPengeluaranRiil < 0 || row.components.some(function(item) {
+        return typeof item.nilaiRiil !== 'number' || !Number.isFinite(item.nilaiRiil) || item.nilaiRiilTerbaca === false;
+      })) throw new Error('Komponen, rute, nominal resmi, dan akun wajib dibaca sebelum impor.');
+  const sent = row.components.reduce(function(sum, item) {
+    return sum + (isSentStatusV4_(item.status) ? item.nilaiRiil : 0);
+  }, 0);
+  if (Math.round(sent * 100) !== Math.round(input.totalPengeluaranRiil * 100)) {
+    throw new Error('Total komponen belum cocok dengan nominal resmi.');
+  }
+}
+
+function findRowsByKeyV5_(sheet, key) {
+  const count = sheet.getLastRow();
+  if (count <= 1) return [];
+  const index = headerMapV4_(sheet)['Kunci SPD'];
+  if (index === undefined) throw new Error('Kolom Kunci SPD belum tersedia di Master.');
+  return sheet.getRange(2, index + 1, count - 1, 1).getValues().flatMap(function(row, i) {
+    return normalizeKeyV4_(row[0]) === key ? [i + 2] : [];
+  });
 }
 
 function findRowByValueV4_(sh, headerName, value) {
@@ -431,14 +486,14 @@ function buildPresenceObjectV4_(parent, item, index) {
   };
 }
 
-function upsertObjectByKeyV4_(sh, headers, keyHeader, keyValue, obj) {
+function upsertObjectByKeyV4_(sh, headers, keyHeader, keyValue, obj, existingRow) {
   const headerMap = headerMapV4_(sh);
   const keyIndex = headerMap[keyHeader];
   if (keyIndex === undefined) throw new Error('Header kunci tidak ditemukan: ' + keyHeader);
 
   const lastRow = sh.getLastRow();
-  let targetRow = lastRow + 1;
-  if (lastRow > 1) {
+  let targetRow = existingRow || lastRow + 1;
+  if (!existingRow && lastRow > 1) {
     const keys = sh.getRange(2, keyIndex + 1, lastRow - 1, 1).getValues();
     for (let i = 0; i < keys.length; i++) {
       if (String(keys[i][0] || '').trim() === keyValue) {
@@ -448,7 +503,7 @@ function upsertObjectByKeyV4_(sh, headers, keyHeader, keyValue, obj) {
     }
   }
 
-  const row = headers.map(function(h) { return obj[h] !== undefined ? obj[h] : ''; });
+  const row = headers.map(function(h) { return literalValueV5_(obj[h]); });
   sh.getRange(targetRow, 1, 1, headers.length).setValues([row]);
   return targetRow;
 }
@@ -462,7 +517,7 @@ function replaceChildrenV4_(sh, headers, parentKeyHeader, parentKey, objects) {
   if (lastRow > 1) {
     const values = sh.getRange(2, 1, lastRow - 1, headers.length).getValues();
     const keep = values.filter(function(row) {
-      return String(row[parentIndex] || '').trim() !== parentKey;
+      return normalizeKeyV4_(row[parentIndex]) !== parentKey;
     });
     sh.getRange(2, 1, lastRow - 1, headers.length).clearContent();
     if (keep.length) sh.getRange(2, 1, keep.length, headers.length).setValues(keep);
@@ -470,11 +525,14 @@ function replaceChildrenV4_(sh, headers, parentKeyHeader, parentKey, objects) {
 
   if (objects.length) {
     const start = sh.getLastRow() + 1;
-    const rows = objects.map(function(obj) {
-      return headers.map(function(h) { return obj[h] !== undefined ? obj[h] : ''; });
-    });
+    const rows = objects.map(function(obj) { return headers.map(function(h) { return literalValueV5_(obj[h]); }); });
     sh.getRange(start, 1, rows.length, headers.length).setValues(rows);
   }
+}
+
+function literalValueV5_(value) {
+  if (value === undefined) return '';
+  return typeof value === 'string' && /^=/.test(value.trimStart()) ? "'" + value : value;
 }
 
 function applySummaryFormulasV4_(sh, row) {

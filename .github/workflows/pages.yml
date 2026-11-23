@@ -36,6 +36,7 @@ jobs:
 
       - name: Verify pilot collector JavaScript
         run: |
+          node --check collector-extension-v2/collector-core.js
           node --check collector-extension-v2/content-script.js
           node --check collector-extension-v2/popup.js
           node -e "JSON.parse(require('fs').readFileSync('collector-extension-v2/manifest.json','utf8'))"

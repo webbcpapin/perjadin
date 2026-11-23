@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Clock3, Pencil, RefreshCw, Save, Search, Upload, UserRound, WalletCards, X } from 'lucide-react';
-import { readApiResponse } from './apiClient';
+import { appsScriptEndpoint, readApiResponse, verifyV5Endpoint } from './apiClient';
 
 type DashboardRow = Record<string, unknown>;
 
@@ -63,7 +63,8 @@ export default function DashboardV4({ endpoint, authIdToken = '' }: Props) {
           : await fetch(`${url}${separator}action=getDashboardV4`, { method: 'GET' });
         return readApiResponse(response);
       };
-      const payload = await request(endpoint.trim() || DEFAULT_V4_ENDPOINT);
+      const endpointUrl = endpoint.trim() || DEFAULT_V4_ENDPOINT;
+      const payload = await request(authIdToken ? await verifyV5Endpoint(endpointUrl) : appsScriptEndpoint(endpointUrl));
       if (!payload.success || !Array.isArray(payload.data)) throw new Error(String(payload.message || 'Database belum mengembalikan data dashboard.'));
       // Endpoint dipilih pemilik aplikasi. Tidak fallback diam-diam ke deployment lain.
       setRows(Array.isArray(payload.data) ? payload.data as DashboardRow[] : []);
@@ -91,7 +92,8 @@ export default function DashboardV4({ endpoint, authIdToken = '' }: Props) {
     setRows((current) => current.map((row) => text(row, 'Kunci SPD') === key ? optimisticRow : row));
     setEditingRow(null);
     try {
-      const response = await fetch(endpoint.trim() || DEFAULT_V4_ENDPOINT, {
+      const endpointUrl = endpoint.trim() || DEFAULT_V4_ENDPOINT;
+      const response = await fetch(authIdToken ? await verifyV5Endpoint(endpointUrl) : appsScriptEndpoint(endpointUrl), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ action: 'updateStatusV4', kunciSPD: key, status: editStatus, kekuranganDokumen: editMissing, authIdToken }),
@@ -122,7 +124,8 @@ export default function DashboardV4({ endpoint, authIdToken = '' }: Props) {
         reader.onerror = () => reject(new Error('File tidak dapat dibaca.'));
         reader.readAsDataURL(file);
       });
-      const response = await fetch(endpoint.trim() || DEFAULT_V4_ENDPOINT, {
+      const endpointUrl = endpoint.trim() || DEFAULT_V4_ENDPOINT;
+      const response = await fetch(authIdToken ? await verifyV5Endpoint(endpointUrl) : appsScriptEndpoint(endpointUrl), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ action: 'uploadDocumentV4', kunciSPD: text(editingRow, 'Kunci SPD'), fileName: file.name, mimeType: file.type, base64, authIdToken }),
@@ -143,7 +146,7 @@ export default function DashboardV4({ endpoint, authIdToken = '' }: Props) {
     const incomplete = rows.filter((row) => {
       const status = displayStatus(row);
       const geotag = text(row, 'Status Geotag');
-      return ['Belum Lengkap', 'Kekurangan Dokumen'].includes(status) || geotag !== 'Lengkap' || number(row, 'Jumlah Presensi') < 4;
+      return ['Belum Lengkap', 'Kekurangan Dokumen'].includes(status) || geotag !== 'Lengkap' || Boolean(text(row, 'Kekurangan Dokumen'));
     });
     return { count, incomplete, total: rows.length, totalValue: rows.reduce((sum, row) => sum + number(row, 'Total Pengeluaran Riil'), 0) };
   }, [rows]);
@@ -163,15 +166,14 @@ export default function DashboardV4({ endpoint, authIdToken = '' }: Props) {
       const current = grouped.get(key) || { name, nip, total: 0, followUp: 0, statuses: [], issues: [], spds: [] };
       const status = displayStatus(row);
       const geotag = text(row, 'Status Geotag');
-      const presensi = number(row, 'Jumlah Presensi');
       current.total += 1;
       current.statuses.push(status);
       current.spds.push(text(row, 'Nomor SPD'));
-      if (['Belum Lengkap', 'Kekurangan Dokumen'].includes(status) || geotag !== 'Lengkap' || presensi < 4) {
+      if (['Belum Lengkap', 'Kekurangan Dokumen'].includes(status) || geotag !== 'Lengkap' || text(row, 'Kekurangan Dokumen')) {
         current.followUp += 1;
         if (['Belum Lengkap', 'Kekurangan Dokumen'].includes(status)) current.issues.push(`${text(row, 'Nomor SPD')}: pertanggungjawaban ${status.toLowerCase()}`);
-        if (presensi < 4) current.issues.push(`${text(row, 'Nomor SPD')}: presensi baru ${presensi} titik`);
-        if (geotag && geotag !== 'Lengkap') current.issues.push(`${text(row, 'Nomor SPD')}: geotag ${geotag.toLowerCase()}`);
+        if (geotag !== 'Lengkap') current.issues.push(`${text(row, 'Nomor SPD')}: geotag ${geotag.toLowerCase() || 'belum dinilai'}`);
+        if (text(row, 'Kekurangan Dokumen')) current.issues.push(`${text(row, 'Nomor SPD')}: ${text(row, 'Kekurangan Dokumen')}`);
       }
       grouped.set(key, current);
     });
@@ -196,7 +198,7 @@ export default function DashboardV4({ endpoint, authIdToken = '' }: Props) {
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Metric label="Total SPD" value={stats.total} icon={<WalletCards className="h-5 w-5" />} />
         <Metric label="Perlu ditindaklanjuti" value={stats.incomplete.length} icon={<AlertTriangle className="h-5 w-5" />} tone="amber" />
-        <Metric label="Presensi lengkap" value={rows.filter((row) => number(row, 'Jumlah Presensi') >= 4 && text(row, 'Status Geotag') === 'Lengkap').length} icon={<CheckCircle2 className="h-5 w-5" />} tone="green" />
+        <Metric label="Presensi lengkap" value={rows.filter((row) => text(row, 'Status Geotag') === 'Lengkap').length} icon={<CheckCircle2 className="h-5 w-5" />} tone="green" />
         <Metric label="Total pengeluaran" value={rupiah(stats.totalValue)} icon={<Clock3 className="h-5 w-5" />} />
       </div>
 
@@ -230,7 +232,7 @@ export default function DashboardV4({ endpoint, authIdToken = '' }: Props) {
               <select value={filter} onChange={(event) => setFilter(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option>Semua</option>{statuses.map((status) => <option key={status}>{status}</option>)}</select>
             </div>
           </div>
-          <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[980px] text-left text-sm"><thead className="border-b bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="px-3 py-3">Pegawai</th><th className="px-3 py-3">Kegiatan / ST</th><th className="px-3 py-3">ID Kegiatan</th><th className="px-3 py-3">SPD</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Dokumen & presensi</th><th className="px-3 py-3 text-right">Aksi</th></tr></thead><tbody>{visibleRows.map((row) => { const status = displayStatus(row); const missing = text(row, 'Status Geotag') !== 'Lengkap' || number(row, 'Jumlah Presensi') < 4 || Boolean(text(row, 'Kekurangan Dokumen')); return <tr key={text(row, 'Kunci SPD')} className="border-b last:border-0"><td className="px-3 py-3"><span className="inline-flex items-center gap-2 font-medium"><UserRound className="h-4 w-4 text-slate-400" />{text(row, 'Pelaksana SPD') || '-'}</span><div className="pl-6 text-xs text-slate-500">{text(row, 'NIP')}</div></td><td className="max-w-[280px] px-3 py-3"><div className="truncate">{text(row, 'Nama Kegiatan') || '-'}</div><div className="text-xs text-slate-500">{text(row, 'Nomor ST')}</div></td><td className="max-w-[180px] px-3 py-3"><span className="break-all text-xs text-slate-600">{text(row, 'ID Kegiatan') || '-'}</span></td><td className="px-3 py-3 font-medium">{text(row, 'Nomor SPD')}</td><td className="px-3 py-3"><span className={`rounded-full px-2 py-1 text-xs font-semibold ${statusClass(status)}`}>{status}</span></td><td className="px-3 py-3 text-xs"><span className={missing ? 'text-amber-700' : 'text-emerald-700'}>{missing ? 'Perlu dilengkapi' : 'Lengkap'}</span><div className="text-slate-500">{number(row, 'Jumlah Presensi')} titik · geotag {text(row, 'Status Geotag') || '-'}</div>{text(row, 'Kekurangan Dokumen') && <div className="mt-1 max-w-[240px] text-rose-700">{text(row, 'Kekurangan Dokumen')}</div>}</td><td className="px-3 py-3 text-right"><button type="button" onClick={() => openEditor(row)} title="Edit monitoring SPD" aria-label={`Edit monitoring ${text(row, 'Nomor SPD')}`} className="inline-flex items-center gap-1 rounded-lg border border-blue-200 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50"><Pencil className="h-3.5 w-3.5" /> Edit</button></td></tr>; })}</tbody></table></div>
+          <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[980px] text-left text-sm"><thead className="border-b bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="px-3 py-3">Pegawai</th><th className="px-3 py-3">Kegiatan / ST</th><th className="px-3 py-3">ID Kegiatan</th><th className="px-3 py-3">SPD</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Dokumen & presensi</th><th className="px-3 py-3 text-right">Aksi</th></tr></thead><tbody>{visibleRows.map((row) => { const status = displayStatus(row); const missing = text(row, 'Status Geotag') !== 'Lengkap' || Boolean(text(row, 'Kekurangan Dokumen')); return <tr key={text(row, 'Kunci SPD')} className="border-b last:border-0"><td className="px-3 py-3"><span className="inline-flex items-center gap-2 font-medium"><UserRound className="h-4 w-4 text-slate-400" />{text(row, 'Pelaksana SPD') || '-'}</span><div className="pl-6 text-xs text-slate-500">{text(row, 'NIP')}</div></td><td className="max-w-[280px] px-3 py-3"><div className="truncate">{text(row, 'Nama Kegiatan') || '-'}</div><div className="text-xs text-slate-500">{text(row, 'Nomor ST')}</div></td><td className="max-w-[180px] px-3 py-3"><span className="break-all text-xs text-slate-600">{text(row, 'ID Kegiatan') || '-'}</span></td><td className="px-3 py-3 font-medium">{text(row, 'Nomor SPD')}</td><td className="px-3 py-3"><span className={`rounded-full px-2 py-1 text-xs font-semibold ${statusClass(status)}`}>{status}</span></td><td className="px-3 py-3 text-xs"><span className={missing ? 'text-amber-700' : 'text-emerald-700'}>{missing ? 'Perlu dilengkapi' : 'Lengkap'}</span><div className="text-slate-500">{number(row, 'Jumlah Presensi')} titik · geotag {text(row, 'Status Geotag') || '-'}</div>{text(row, 'Kekurangan Dokumen') && <div className="mt-1 max-w-[240px] text-rose-700">{text(row, 'Kekurangan Dokumen')}</div>}</td><td className="px-3 py-3 text-right"><button type="button" onClick={() => openEditor(row)} title="Edit monitoring SPD" aria-label={`Edit monitoring ${text(row, 'Nomor SPD')}`} className="inline-flex items-center gap-1 rounded-lg border border-blue-200 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50"><Pencil className="h-3.5 w-3.5" /> Edit</button></td></tr>; })}</tbody></table></div>
           <p className="mt-3 text-xs text-slate-500">Menampilkan {visibleRows.length} dari {rows.length} SPD.</p>
         </section>
       </>}
