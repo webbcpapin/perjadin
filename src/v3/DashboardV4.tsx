@@ -4,7 +4,7 @@ import { readApiResponse } from './apiClient';
 
 type DashboardRow = Record<string, unknown>;
 
-type Props = { endpoint: string };
+type Props = { endpoint: string; authIdToken?: string };
 
 const DEFAULT_V4_ENDPOINT = 'https://script.google.com/macros/s/AKfycbzPBI2tql2DyCLnNUJIThuAEKz3aRHZhmXDUcwxSY-lSOmFm9zzHarNpThW9PhTJbRY/exec';
 
@@ -39,7 +39,7 @@ function displayStatus(row: DashboardRow) {
   return status;
 }
 
-export default function DashboardV4({ endpoint }: Props) {
+export default function DashboardV4({ endpoint, authIdToken = '' }: Props) {
   const [rows, setRows] = useState<DashboardRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -58,7 +58,9 @@ export default function DashboardV4({ endpoint }: Props) {
     try {
       const request = async (url: string) => {
         const separator = url.includes('?') ? '&' : '?';
-        const response = await fetch(`${url}${separator}action=getDashboardV4`, { method: 'GET' });
+        const response = authIdToken
+          ? await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'getDashboardV4', authIdToken }) })
+          : await fetch(`${url}${separator}action=getDashboardV4`, { method: 'GET' });
         return readApiResponse(response);
       };
       let payload;
@@ -99,7 +101,7 @@ export default function DashboardV4({ endpoint }: Props) {
       const response = await fetch(endpoint.trim() || DEFAULT_V4_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'updateStatusV4', kunciSPD: key, status: editStatus, kekuranganDokumen: editMissing }),
+        body: JSON.stringify({ action: 'updateStatusV4', kunciSPD: key, status: editStatus, kekuranganDokumen: editMissing, authIdToken }),
       });
       const payload = await readApiResponse(response);
       if (!payload.success) throw new Error(String(payload.message || 'Perubahan belum tersimpan.'));
@@ -130,7 +132,7 @@ export default function DashboardV4({ endpoint }: Props) {
       const response = await fetch(endpoint.trim() || DEFAULT_V4_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'uploadDocumentV4', kunciSPD: text(editingRow, 'Kunci SPD'), fileName: file.name, mimeType: file.type, base64 }),
+        body: JSON.stringify({ action: 'uploadDocumentV4', kunciSPD: text(editingRow, 'Kunci SPD'), fileName: file.name, mimeType: file.type, base64, authIdToken }),
       });
       const payload = await readApiResponse(response);
       if (!payload.success) throw new Error(String(payload.message || 'Dokumen belum berhasil diunggah.'));
