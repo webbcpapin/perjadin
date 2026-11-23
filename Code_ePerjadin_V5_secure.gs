@@ -139,7 +139,7 @@ function dashboardV4_() {
   const ss = ssV4_();
   return jsonV4_({
     success: true,
-    version: 4,
+    version: 5,
     data: readSheetObjectsV4_(ss.getSheetByName(V4_SUMMARY_SHEET)),
     components: readSheetObjectsV4_(ss.getSheetByName(V4_COMPONENT_SHEET)),
     routes: readSheetObjectsV4_(ss.getSheetByName(V4_ROUTE_SHEET)),
