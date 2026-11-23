@@ -85,32 +85,47 @@
 
   function captureGeotagTable() {
     const table = [...document.querySelectorAll('table')].find((t) => {
-      const hd = textOf(t.querySelector('thead') || t).toLowerCase();
-      return /waktu tagging/i.test(hd) && /(geo tagging|lokasi geo)/i.test(hd);
+      const header = textOf(t.querySelector('thead') || t).toLowerCase();
+      return /waktu tagging/i.test(header) && /(geo tagging|lokasi geo)/i.test(header);
     });
-    if (!table) return { markdown: '', entries: [], warning: 'Tabel presensi tidak teridentifikasi pada DOM.' };
+    if (!table) return { markdown: '', entries: [], status: 'GAGAL_BACA',
+      warning: 'Tabel presensi tidak ditemukan pada tampilan saat ini.' };
     let currentDate = '';
     const entries = [];
+    let rowsWithTimes = 0;
+    // On the official site an empty date cell can be rendered as either an
+    // empty <td> or an omitted column. Find the time column by its content.
     const rows = [...table.querySelectorAll('tbody tr')];
     for (const row of rows) {
-      const cells = [...row.querySelectorAll(':scope > td')];
-      if (cells.length < 4) continue;
-      const first = textOf(cells[0]);
-      if (dateRe.test(first)) currentDate = first;
-      const time = textOf(cells[1]).replace('.', ':');
-      if (!timeRe.test(time) || !currentDate) continue;
-      const wilayah = textOf(cells[2]);
-      const lokasi = textOf(cells[3]).replace(/Lihat Di Map/gi, '').trim();
-      if (!wilayah) continue;
-      entries.push({ hariTanggal: currentDate, waktuTagging: time, wilayahTagging: wilayah, lokasiTagging: lokasi });
+      const cells = [...row.querySelectorAll(':scope > td')].map(textOf);
+      if (!cells.length) continue;
+      const date = cells.find((cell) => dateRe.test(cell));
+      if (date) currentDate = date;
+      const timeIndex = cells.findIndex((cell) => timeRe.test(cell));
+      if (timeIndex < 0) continue;
+      rowsWithTimes++;
+      const time = cells[timeIndex].replace('.', ':');
+      const wilayah = clean(cells[timeIndex + 1] || '');
+      const lokasi = clean(cells.slice(timeIndex + 2).join(' ').replace(/Lihat Di Map/gi, ''));
+      if (!currentDate || !wilayah) continue;
+      entries.push({ hariTanggal: currentDate, waktuTagging: time,
+        wilayahTagging: wilayah, lokasiTagging: lokasi });
     }
     const markdown = [
       'Log Data Presensi',
       '| HARI, TANGGAL | WAKTU TAGGING | WILAYAH | LOKASI GEO TAGGING |',
       '| --- | --- | --- | --- |',
-      ...entries.map((e) => '| ' + [e.hariTanggal, e.waktuTagging, e.wilayahTagging, e.lokasiTagging].map((v) => v.replace(/[|\n\r]/g, ' ')).join(' | ') + ' |'),
+      ...entries.map((e) => '| ' +
+        [e.hariTanggal, e.waktuTagging, e.wilayahTagging, e.lokasiTagging]
+          .map((v) => String(v).replace(/[|\n\r]/g, ' ')).join(' | ') + ' |'),
     ].join('\n');
-    return { markdown, entries, warning: entries.length ? '' : 'Tabel presensi ada tetapi baris tagging tidak terbaca.' };
+    if (entries.length) return { markdown, entries, status: 'TERBACA', warning: '' };
+    if (!rowsWithTimes) {
+      // Not an extraction error. The source currently displays no geotag rows.
+      return { markdown, entries, status: 'TIDAK_ADA_DATA', warning: '' };
+    }
+    return { markdown, entries, status: 'GAGAL_BACA',
+      warning: 'Ada waktu tagging tetapi tanggal atau wilayah belum dapat diparsing.' };
   }
 
   function normalizeFinancial(body) {
@@ -139,7 +154,7 @@
     if (!routeFound) warnings.push('Tab Rute belum bisa dibaca; komponen harus diverifikasi manual.');
     const financial = normalizeFinancial(scopedDetailText());
 
-    let presence = { markdown: '', entries: [], warning: '' };
+    let presence = { markdown: '', entries: [], warning: '', status: 'BELUM_DIPERIKSA' };
     const switched = await switchTab(/^Presensi Perjalanan Dinas$/i,
       /(Log Data Presensi|GEOTAGGING|WAKTU TAGGING)/i, 'Presensi Perjalanan Dinas')
       .catch((error) => { warnings.push(error.message); return false; });
@@ -164,7 +179,7 @@
     return {
       sourceKey: sourceKey || (idKegiatan + '|' + nomorSPD).toLowerCase(),
       idKegiatan, nomorSPD, namaPegawai,
-      rawText, presenceRows: presence.entries.length,
+      rawText, presenceRows: presence.entries.length, presensiStatus: presence.status,
       sourceHash: await hashText(rawText),
       warnings, sourceUrl: location.href,
       capturedAt: new Date().toISOString(),
@@ -180,6 +195,7 @@
     await writeState(state);
   }
   async function indexCurrentPage() {
+    const jenisIndeks = /\/list-pelaksana-spd\//i.test(location.pathname) ? 'pelaksana-spd' : 'kegiatan';
     const items = listRows().map((row) => {
       const raw = textOf(row);
       return {
@@ -187,13 +203,16 @@
         idKegiatan: raw.match(/Id\s*Kegiatan\s*:\s*([a-z0-9-]+)/i)?.[1] || '',
         nomorST: raw.match(/ST-\d+\/[A-Z0-9.]+\/\d+/i)?.[0] || '',
         nomorSPD: raw.match(/SPD-\d+\/\d+-\d+/i)?.[0] || '',
-        statusSumber: raw.match(/\b(Draft|Disetujui PPK|Disetujui|Dikirim|Ditolak|Selesai)\b/i)?.[0] || '',
+        jenisIndeks,
+        statusSumber: jenisIndeks === 'kegiatan'
+          ? (raw.match(/\b(Laporan Tersedia|Belum ada laporan)\b/i)?.[0] || 'Status laporan belum tersedia')
+          : (raw.match(/\b(Draft|Disetujui PPK|Disetujui|Dikirim|Ditolak|Selesai)\b/i)?.[0] || 'Status SPD belum tersedia'),
         rawText: raw, sourceUrl: location.href, capturedAt: new Date().toISOString(),
       };
     });
     const state = await readState();
-    const stable = (item) => item.idKegiatan && item.nomorSPD
-      ? (item.idKegiatan + '|' + item.nomorSPD).toLowerCase()
+    const stable = (item) => item.idKegiatan
+      ? ((item.jenisIndeks || 'kegiatan') + '|' + item.idKegiatan + '|' + (item.nomorSPD || '')).toLowerCase()
       : item.sourceKey;
     const byKey = new Map((state.index || []).map((r) => [stable(r), r]));
     for (const item of items) byKey.set(stable(item), item);
@@ -277,6 +296,10 @@
   async function pilot(options = {}) {
     if (running) return { ok: false, reason: 'Kolektor masih berjalan.' };
     if (!isPerjadin() || !getListTable()) return { ok: false, reason: 'Buka daftar Pelaksana SPD terlebih dahulu.' };
+    if (!/\/list-pelaksana-spd\//i.test(location.pathname)) {
+      await indexCurrentPage();
+      return { ok: false, reason: 'Halaman ini masih daftar KEGIATAN. Kolektor sudah mencatat indeks kegiatan. Buka satu kegiatan hingga muncul List Pelaksana SPD, lalu jalankan Ambil SPD Baru. Halaman kegiatan tidak mempunyai tombol detail SPD langsung.' };
+    }
     running = true; stopRequested = false;
     const limit = Math.max(1, Math.min(20, Number(options.limit) || 5));
     const refreshExisting = options.refreshExisting === true;
