@@ -4,7 +4,8 @@ import { inferDestinationFromGeotags, selectRequiredGeotagPoints } from '../util
 import { parseEPerjadinV3 } from './parserV3';
 import { readApiResponse } from './apiClient';
 
-type PilotEntry = { rawText: string; sourceKey?: string; idKegiatan?: string; nomorSPD?: string; sourceUrl?: string; warnings?: string[] };
+type PilotEntry = { rawText: string; sourceKey?: string; idKegiatan?: string; nomorSPD?: string; sourceUrl?: string; sourceHash?: string; changeType?: string; warnings?: string[] };
+type Comparison = { state: 'baru' | 'sama' | 'berubah' | 'perlu-review'; oldHash: string; note: string };
 type PilotFile = { schemaVersion: number; source: string; collector: string; records: PilotEntry[] };
 type Feedback = Record<string, string>;
 const formatMoney = (value: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(value || 0);
@@ -22,6 +23,10 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
   const [saving, setSaving] = useState(false);
   const [reviewed, setReviewed] = useState(false);
   const [result, setResult] = useState('');
+  const [comparison, setComparison] = useState<Record<string, Comparison>>({});
+  const [comparisonReady, setComparisonReady] = useState(false);
+  const [selectedUpdates, setSelectedUpdates] = useState<Record<string, boolean>>({});
+  const [checking, setChecking] = useState(false);
 
   const records = useMemo(() => entries.map((entry, i) => {
     const parsed = parseEPerjadinV3(entry.rawText);
@@ -48,7 +53,7 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
   }, [records]);
 
   async function loadFile(file?: File) {
-    setEntries([]); setFeedback({}); setError(''); setResult(''); setReviewed(false); setAccounts({});
+    setEntries([]); setFeedback({}); setError(''); setResult(''); setReviewed(false); setAccounts({}); setComparison({}); setComparisonReady(false); setSelectedUpdates({});
     if (!file) return;
     if (file.size > 4 * 1024 * 1024) return setError('Berkas maksimal 4 MB. Ambil per batch 5–20 SPD.');
     try {
@@ -65,30 +70,104 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }
 
+
+  function parseMoney(value: unknown): number {
+    if (typeof value === 'number') return value;
+    const str = String(value ?? '').replace(/[^\d.,-]/g,'');
+    if (!str) return 0;
+    const decimal = Math.max(str.lastIndexOf('.'), str.lastIndexOf(','));
+    if (decimal >= 0 && str.length - decimal - 1 === 2) {
+      return Number(str.slice(0,decimal).replace(/[.,]/g,'')+'.'+str.slice(decimal+1)) || 0;
+    }
+    return Number(str.replace(/[.,]/g,'')) || 0;
+  }
+  async function masterSnapshot() {
+    if (!authIdToken) throw new Error('Perbandingan memerlukan backend V5 dan login Google.');
+    const response = await fetch(endpoint.trim(), {
+      method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action:'getDashboardV4', authIdToken })
+    });
+    const payload = await readApiResponse(response);
+    if (!payload.success || Number(payload.version) !== 5 ||
+        !Array.isArray(payload.data) || !Array.isArray(payload.components)) {
+      throw new Error('Backend V5 terautentikasi belum tersedia. Tidak ada data yang dikirim.');
+    }
+    return payload;
+  }
+  async function compareMaster() {
+    setChecking(true); setError(''); setComparisonReady(false); setComparison({}); setSelectedUpdates({});
+    try {
+      const payload = await masterSnapshot();
+      const master = new Map<string, Record<string, unknown>>(
+        (payload.data as Record<string, unknown>[]).map((r) => [String(r['Kunci SPD'] || '').toLowerCase().trim(), r])
+      );
+      const counts = new Map<string, number>();
+      (payload.components as Record<string, unknown>[]).forEach((r) => {
+        const key = String(r['Kunci SPD'] || '').toLowerCase().trim();
+        counts.set(key, (counts.get(key) || 0) + 1);
+      });
+      const savedAccounts: Record<string,string> = {}, found: Record<string,Comparison> = {};
+      uniqueRecords.forEach((item) => {
+        const old = master.get(item.key);
+        if (!old) { found[item.key] = { state:'baru', oldHash:'', note:'SPD belum tersimpan' }; return; }
+        const account = String(old['Kode Akun'] || '');
+        if (findBudgetAccount(account)) savedAccounts[item.key] = account;
+        const oldHash = String(old['Raw Hash'] || '').trim();
+        const entry = entries.find((e) => (e.idKegiatan + '|' + e.nomorSPD).toLowerCase() === item.key);
+        if (oldHash && entry?.sourceHash) {
+          found[item.key] = { state: oldHash === entry.sourceHash ? 'sama' : 'berubah',
+            oldHash, note: oldHash === entry.sourceHash ? 'Hash tidak berubah' : 'Hash sumber berubah' };
+        } else if (Math.abs(parseMoney(old['Total Pengeluaran Riil']) - item.official) >= 1 ||
+                   (counts.get(item.key) || 0) !== (item.parsed?.components.length || 0)) {
+          found[item.key] = { state:'berubah', oldHash, note:'Nilai atau jumlah komponen berbeda' };
+        } else {
+          found[item.key] = { state:'perlu-review', oldHash, note:'Master belum memiliki hash pembanding; tidak otomatis ditimpa' };
+        }
+      });
+      setComparison(found); setAccounts((current) => ({ ...savedAccounts, ...current }));
+      setReviewed(false); setComparisonReady(true);
+      const sizes = { baru:0, berubah:0, sama:0, 'perlu-review':0 };
+      Object.values(found).forEach((c) => sizes[c.state]++);
+      setResult('Hasil: '+sizes.baru+' baru, '+sizes.berubah+' berubah, '+sizes.sama+
+        ' sama, '+sizes['perlu-review']+' belum pasti.');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    } finally { setChecking(false); }
+  }
+
   async function saveBatch() {
-    if (!reviewed || saving || !endpoint.trim()) return;
+    if (!reviewed || saving || !endpoint.trim() || !comparisonReady) return;
     if (!authIdToken) return setError('Untuk menyimpan batch, aktifkan backend V5 dan login Google terlebih dahulu. Pratinjau JSON tetap bisa digunakan.');
     setSaving(true); setResult('Membaca daftar SPD yang sudah ada di Master...'); setError('');
     const nextFeedback: Feedback = {};
     try {
       const url = endpoint.trim();
-      const response = await fetch(url, { method: 'POST', headers: { 'Content-Type':'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'getDashboardV4', authIdToken }) });
-      const dashboard = await readApiResponse(response);
-      if (!dashboard.success || !Array.isArray(dashboard.data) || Number(dashboard.version) !== 5) throw new Error('Batch hanya boleh disimpan melalui backend V5 terautentikasi. Tidak ada data yang dikirim.');
-      const existing = new Set(dashboard.data.map((item) => {
-        const row = item as Record<string, unknown>;
-        return String(row['Kunci SPD'] || '').toLowerCase().trim();
-      }));
+      const dashboard = await masterSnapshot();
+      const master = new Map<string, Record<string, unknown>>(
+        (dashboard.data as Record<string, unknown>[]).map((r) => [
+          String(r['Kunci SPD'] || '').toLowerCase().trim(), r
+        ])
+      );
       let success = 0, skipped = 0, failed = 0;
       for (const item of uniqueRecords) {
         const p = item.parsed;
-        if (!p || item.issues.length || !item.akun) {
-          nextFeedback[item.key] = 'Dilewati: data perlu diperiksa';
-          skipped++; continue;
+        const state = comparison[item.key];
+        if (!p || item.issues.length || !item.akun || !state) {
+          nextFeedback[item.key] = 'Dilewati: data tidak lengkap'; skipped++; continue;
         }
-        if (existing.has(item.key)) {
-          nextFeedback[item.key] = 'Dilewati: SPD sudah ada di Master (tidak ditimpa)';
-          skipped++; continue;
+        const current = master.get(item.key);
+        if (state.state === 'sama' || state.state === 'perlu-review') {
+          nextFeedback[item.key] = 'Dilewati: tidak ada perubahan terkonfirmasi'; skipped++; continue;
+        }
+        if (state.state === 'baru' && current) {
+          nextFeedback[item.key] = 'Dilewati: SPD sudah ditambahkan pihak lain'; skipped++; continue;
+        }
+        if (state.state === 'berubah') {
+          if (!selectedUpdates[item.key] || !current ||
+              String(current['Raw Hash'] || '').trim() !== state.oldHash) {
+            nextFeedback[item.key] = 'Dilewati: pembaruan tidak disetujui atau snapshot berubah';
+            skipped++; continue;
+          }
         }
         const dest = p.tujuan || inferDestinationFromGeotags(p.geotags, p.tanggalKegiatan);
         const geo = selectRequiredGeotagPoints(p.geotags, p.tanggalKegiatan, dest);
@@ -104,11 +183,12 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
           tanggalKegiatan: p.tanggalKegiatan, durasiHari: p.durasiHari, menginap: p.menginap,
           uangMuka: p.uangMuka, totalPengeluaranRiil: item.official,
           kodeAkun: item.akun.kode, namaAkun: item.akun.nama,
-          statusPJ: 'Belum Lengkap', statusGeotag: geo?.status || 'Belum Dinilai',
+          statusPJ: current ? String(current['Status Pertanggungjawaban'] || '') : 'Belum Lengkap', statusGeotag: geo?.status || 'Belum Dinilai',
           start: location(pts.start), clockIn: location(pts.clockIn),
           clockOut: location(pts.clockOut), end: location(pts.end),
           detailGeotag: p.geotags.map((g) => [g.hariTanggal,g.waktuTagging,g.wilayahTagging,g.lokasiTagging].join(' ')).join(' | '),
           tanggalInput: today(), sumberData: 'Pilot Kolektor V2', waktuRekamSumber: new Date().toISOString(),
+          rawHash: entries.find((e) => e.idKegiatan === p.idKegiatan && e.nomorSPD === p.nomorSPD)?.sourceHash || '',
           schemaVersion: 4, routes: p.routes, components: p.components, geotags: p.geotags,
           tahap: 'Pertanggungjawaban', nka: p.nomorSPD, namaPegawai: p.peserta,
           lamaHari: p.durasiHari, nilaiRiil: item.official,
@@ -120,8 +200,8 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
           });
           const payload = await readApiResponse(res);
           if (!payload.success) throw new Error(String(payload.message || 'Simpan ditolak'));
-          existing.add(item.key); success++;
-          nextFeedback[item.key] = 'Tersimpan';
+          success++;
+          nextFeedback[item.key] = current ? 'SPD diperbarui' : 'SPD baru tersimpan';
         } catch (e) {
           failed++;
           nextFeedback[item.key] = 'Gagal: ' + (e instanceof Error ? e.message : String(e));
@@ -130,7 +210,8 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
         setResult('Tersimpan '+success+' | Dilewati '+skipped+' | Gagal '+failed);
       }
       setFeedback({ ...nextFeedback });
-      setResult('Selesai: '+success+' data baru | '+skipped+' dilewati | '+failed+' gagal. Tidak ada SPD lama ditimpa.');
+      setResult('Selesai: '+success+' tersimpan atau diperbarui | '+skipped+' dilewati | '+failed+' gagal.');
+      setComparisonReady(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -142,14 +223,15 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
     <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div><h2 className="text-lg font-semibold">Impor Batch Kolektor V2</h2>
-          <p className="mt-1 text-sm text-slate-500">Pilot 5–20 SPD. Tinjau nilai dan akun sebelum menyimpan. SPD yang sudah ada tidak ditimpa.</p></div>
+          <p className="mt-1 text-sm text-slate-500">Pilot 5–20 SPD. Tinjau nilai dan akun sebelum menyimpan. SPD lama tidak ditimpa tanpa konfirmasi.</p></div>
         <button type="button" onClick={onClose} className="rounded-md border px-3 py-2 text-sm">Tutup impor</button>
       </div>
       <label className="mt-5 block text-sm font-semibold">Pilih JSON dari ekstensi Chrome V2
         <input type="file" accept=".json,application/json" onChange={(e) => void loadFile(e.target.files?.[0])} className="mt-2 block w-full rounded-md border p-2 font-normal" />
       </label>
       {!!entries.length && <>
-        <p className="mt-4 text-sm font-semibold">{uniqueRecords.length} SPD unik, {importable} siap disimpan, {uniqueRecords.length-importable} perlu diperiksa</p>
+        <p className="mt-4 text-sm font-semibold">{uniqueRecords.length} SPD unik, {importable} memenuhi validasi, {uniqueRecords.length-importable} perlu diperiksa</p>
+        <button type="button" onClick={() => void compareMaster()} disabled={checking || !authIdToken} className="mt-3 rounded-md border border-blue-700 px-3 py-2 text-sm text-blue-700 disabled:opacity-50">{checking ? 'Memeriksa Master...' : 'Bandingkan dengan Master'}</button>
         <div className="mt-3 max-h-[480px] space-y-3 overflow-y-auto">
           {uniqueRecords.map((item) => <article key={item.key} className="rounded-lg border p-3 text-sm">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -157,6 +239,8 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
               <span className={item.issues.length ? 'text-amber-700' : 'text-emerald-700'}>{item.issues.length ? 'Perlu tinjau' : 'Siap'}</span>
             </div>
             <p className="mt-1 text-slate-600">{item.parsed?.namaKegiatan || 'Kegiatan belum terbaca'}</p>
+            {comparison[item.key] && <p className="mt-1 text-xs font-semibold text-blue-700">Master: {comparison[item.key].state.toUpperCase()} · {comparison[item.key].note}</p>}
+            {comparison[item.key]?.state === 'berubah' && <label className="mt-2 flex items-start gap-2 text-xs"><input type="checkbox" checked={Boolean(selectedUpdates[item.key])} onChange={(e) => {setSelectedUpdates((prev)=>({...prev,[item.key]:e.target.checked}));setReviewed(false);}} />Saya menyetujui pembaruan SPD ini setelah meneliti perubahannya.</label>}
             <p className="mt-1">Total resmi: {formatMoney(item.official)}. Komponen dihitung: {formatMoney(item.sent)}. {item.parsed?.components.length || 0} jenis biaya.</p>
             <label className="mt-2 block text-xs font-medium">Akun anggaran
               <select className="mt-1 w-full rounded-md border p-2 font-normal" value={item.parsed?.kodeAkun || accounts[item.key] || ''} onChange={(e) => {setAccounts((s)=>({...s,[item.key]:e.target.value}));setReviewed(false);}}>
@@ -170,10 +254,10 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
         </div>
         <label className="mt-4 flex items-start gap-2 text-sm">
           <input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.target.checked)} className="mt-1" />
-          Saya sudah memeriksa kebenaran akun dan nilai. Hanya SPD baru yang boleh disimpan.
+          Saya sudah memeriksa nilai, akun, dan perbandingan. SPD lama diperbarui hanya jika saya memilihnya.
         </label>
-        <button type="button" onClick={() => void saveBatch()} disabled={!reviewed || saving || !importable || !authIdToken} className="mt-3 rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">
-          {saving ? 'Menyimpan data baru...' : 'Simpan SPD baru ke Master'}
+        <button type="button" onClick={() => void saveBatch()} disabled={!reviewed || saving || !importable || !authIdToken || !comparisonReady} className="mt-3 rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">
+          {saving ? 'Menyimpan...' : 'Simpan SPD Baru / Berubah Terpilih'}
         </button>
       </>}
       {result && <p className="mt-3 rounded-md bg-blue-50 p-3 text-sm text-blue-700">{result}</p>}
