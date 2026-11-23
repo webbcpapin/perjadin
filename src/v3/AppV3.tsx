@@ -83,8 +83,8 @@ export default function AppV3() {
   }, [parsed]);
   const sourceTotal = parsed?.totalPengeluaranRiil || totalKomponenDikirim || 0;
   const componentDelta = sourceTotal - totalKomponenDikirim;
-  const uangHarian = parsed?.components.find((item) => /^Uang Harian$/i.test(item.nama))?.nilaiRiil || 0;
-  const ready = Boolean(parsed?.idKegiatan && parsed?.nomorST && parsed?.peserta && parsed?.nomorSPD && sourceTotal > 0 && account);
+  const uangHarian = parsed?.components.find((item) => /^Uang Harian\b/i.test(item.nama))?.nilaiRiil || 0;
+  const ready = Boolean(parsed?.idKegiatan && parsed?.nomorST && parsed?.peserta && parsed?.nomorSPD && sourceTotal > 0 && parsed.components.length > 0 && Math.abs(componentDelta) < 1 && account);
 
   async function validateConnection() {
     const url = endpoint.trim();
@@ -124,6 +124,8 @@ export default function AppV3() {
     if (!account) return setMessage('Akun belum teridentifikasi. Pilih akun yang benar sebelum menyimpan.');
     if (!parsed.nomorSPD) return setMessage('Nomor SPD belum terbaca. Data tidak disimpan.');
     if (!sourceTotal) return setMessage('Total Pengeluaran Riil belum terbaca. Data tidak disimpan.');
+    if (!parsed.components.length) return setMessage('Komponen biaya belum terbaca. Perbaiki data parsing sebelum menyimpan.');
+    if (Math.abs(componentDelta) >= 1) return setMessage('Total komponen belum sesuai dengan Total Pengeluaran Riil. Data tidak disimpan.');
 
     const points = geotag?.points || {};
     const detailGeotag = parsed.geotags
