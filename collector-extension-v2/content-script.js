@@ -240,6 +240,7 @@
     if (!isPerjadin() || !getListTable()) return { ok: false, reason: 'Buka daftar Pelaksana SPD terlebih dahulu.' };
     running = true; stopRequested = false;
     const limit = Math.max(1, Math.min(20, Number(options.limit) || 5));
+    const refreshExisting = options.refreshExisting === true;
     const maxPages = Math.max(1, Math.min(10, Number(options.maxPages) || 5));
     let count = 0, skipped = 0, page = 0;
     await progress({ state: 'running', completed: 0, skipped: 0, limit, page: 1, message: '' });
@@ -250,7 +251,7 @@
         for (const sourceKey of queue) {
           if (stopRequested || count >= limit) break;
           const state = await readState();
-          if (state.records.some((r) => r.sourceKey === sourceKey)) { skipped++; continue; }
+          if (!refreshExisting && state.records.some((r) => r.sourceKey === sourceKey)) { skipped++; continue; }
           const row = listRows().find((r) => listKey(r) === sourceKey);
           const button = row && detailControl(row);
           if (!button) {
