@@ -1,4 +1,4 @@
-# ePerjadin Automation Pilot V2 (read-only)
+# ePerjadin Collector V2.1 (lokal, read-only)
 
 ## Tujuan
 Mengurangi kegiatan copy-paste manual dari SATU Kemenkeu tanpa mengubah proses persetujuan, pembayaran, atau data sumber. Ekstensi hanya berjalan pada tab SATU Kemenkeu yang sudah login dan saat diperintahkan oleh pegawai yang berwenang.
@@ -6,6 +6,9 @@ Mengurangi kegiatan copy-paste manual dari SATU Kemenkeu tanpa mengubah proses p
 ## Status
 - Pengumpulan massal dari detail SPD berbasis navigasi UI: **pilot, belum terverifikasi pada UI produksi Satu Kemenkeu**.
 - Maksimum 20 SPD per proses dan 5 halaman daftar. Uji dulu dengan 5 SPD.
+- Tab Rute Perjalanan Dinas dan Presensi Perjalanan Dinas dibaca bergantian dari halaman detail yang sama. Geotag disimpan sebagai tabel berkolom terstruktur.
+- Menu Indeks daftar yang tampil menyimpan semua baris termasuk Draft, bila memang terlihat pada daftar.
+- SHA-256 dari detail digunakan untuk melihat perubahan pada ekstraksi lokal berikutnya. Ini bukan tanda tangan digital resmi ePerjadin.
 - Bila detail hanya tersedia melalui full-page reload, collector dapat berhenti sementara, menyimpan data yang sempat berhasil dan dapat dijalankan ulang. Tidak ada bypass login maupun pengambilan via endpoint internal tersembunyi.
 - Jika ikon detail tidak dikenali oleh selector aman, item dilewati dan dicatat untuk penyesuaian selector, bukan mencoba tombol lain.
 - File JSON mengandung nama, NIP, SPD, nominal dan geotag. Simpan secara terbatas dan hapus setelah selesai.
@@ -14,12 +17,15 @@ Mengurangi kegiatan copy-paste manual dari SATU Kemenkeu tanpa mengubah proses p
 1. Download/clone repository **webbcpapin/perjadin**; buka Chrome **chrome://extensions**.
 2. Aktifkan Developer mode, lalu **Load unpacked** folder `collector-extension-v2`.
 3. Login ke SATU Kemenkeu secara normal. Buka **List Pelaksana SPD** dalam modul Perjadin.
-4. Klik ikon **Kolektor ePerjadin V2**. Pilih **5 SPD** lalu **Ambil detail otomatis**.
-5. Biarkan tab SATU Kemenkeu terbuka. Setelah proses selesai, buka kembali popup untuk melihat jumlah berhasil dan error.
-6. Klik **Unduh JSON**; jangan unggah berkas tersebut ke GitHub atau tempat publik.
+4. Klik ikon **Kolektor ePerjadin V2.1**. Pilih **5 SPD** lalu **Ambil SPD baru**.
+   - Jika sekarang berada di halaman detail pada tab Presensi, pilih **Rekam detail yang terbuka**. Kolektor akan mencoba membaca tab Rute dan Presensi tanpa perlu copy-paste.
+   - Untuk menyimpan daftar termasuk status Draft, klik **Indeks daftar yang tampil** pada halaman daftar.
+   - Untuk memeriksa ulang perubahan data yang pernah direkam, klik **Periksa ulang SPD lama**.
+5. Biarkan tab SATU Kemenkeu terbuka. Setelah proses selesai, buka kembali popup untuk melihat jumlah berhasil dan error. Ekstensi menyimpan progres setiap SPD di Chrome storage, sehingga proses berikutnya dapat melewati SPD yang sudah direkam. Jika situs memuat ulang halaman penuh, proses mungkin berhenti dan perlu dilanjutkan manual dari daftar.
+6. Klik **Unduh JSON** atau **Ringkasan CSV**; jangan unggah berkas tersebut ke GitHub atau tempat publik. Hanya file JSON berisi rincian yang dapat diimpor ke ePerjadin Workspace.
 7. Buka https://webbcpapin.github.io/perjadin/ > **Impor Batch Pilot V2**, unggah JSON dan periksa komponen serta akun untuk setiap SPD.
-8. Untuk **pratinjau tanpa menyimpan**, langkah 1–7 sudah cukup. Untuk menyimpan batch, administrator harus lebih dahulu mengaktifkan backend V5 dan login Google (bagian keamanan di bawah).
-9. Setelah login V5 berhasil, centang konfirmasi pemeriksaan lalu **Simpan SPD baru ke Master**. SPD yang sudah ada akan dilewati. Tidak ada pembaruan massal terhadap data existing.
+8. Untuk **pratinjau tanpa menyimpan**, langkah 1–7 sudah cukup. Untuk membandingkan dengan Master dan menyimpan batch, administrator harus mengaktifkan backend V5 dan login Google terlebih dahulu. Klik **Bandingkan dengan Master** untuk memisahkan SPD baru, sama, berubah, atau perlu verifikasi.
+9. Setelah login V5 berhasil, periksa akun dan nilai setiap SPD. Pembaruan SPD lama hanya dilakukan jika statusnya **BERUBAH** dan Anda memilih checkbox konfirmasi pada SPD tersebut. Untuk SPD **perlu-review** tanpa hash pembanding, sistem melewati pembaruan otomatis.
 10. Verifikasi hasil pada tab EPERJADIN_V4 dan EPERJADIN_KOMPONEN. Hapus data lokal pada popup kolektor sesudah digunakan.
 
 ## Validasi wajib
@@ -57,3 +63,6 @@ Langkah administrator:
 - Tidak ada duplikasi di Google Sheets.
 - Setiap kesalahan selector/navigasi berhenti aman dan memberikan pesan jelas.
 - Pengguna yang tidak ada di allowlist tidak dapat mengambil data atau mengubah status di V5.
+
+## Keamanan dan hemat token
+Proses membaca halaman, menghitung hash, memeriksa duplikasi, ekspor JSON/CSV, dan impor batch berjalan dengan JavaScript lokal. Tidak ada permintaan ke layanan model AI. JSON hanya disimpan pada browser lokal sampai pengguna memilih ekspor atau mengimpor ke backend V5. Jangan menyimpan hasil ekstraksi ke repository publik. Hak akses pengambilan tetap mengikuti kewenangan pegawai dan ketentuan pengelola SATU Kemenkeu. Fitur ini tidak membuka atau mengubah persetujuan PPK.
