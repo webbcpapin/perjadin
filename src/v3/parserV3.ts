@@ -39,7 +39,11 @@ function textLines(text: string) {
 
 function isFieldLabel(line: string) {
   const normalized = cleanMarkdown(line).replace(/:$/, '').trim();
-  return FIELD_LABELS.some((label) => normalized.toLowerCase() === label.toLowerCase()) || /^Rute\s+\d+$/i.test(normalized);
+  return FIELD_LABELS.some((label) => normalized.toLowerCase() === label.toLowerCase())
+    || /^Rute\s+\d+$/i.test(normalized)
+    || /^Pada Perjalanan Dinas ini terdapat\s+\d+\s+Rute$/i.test(normalized)
+    || /^Komponen Biaya\b/i.test(normalized)
+    || /^(Uang Harian(?: Dalam Kota)?|Biaya Tiket Pesawat|Uang Penginapan|Uang Taksi Asal|Uang Taksi Tujuan|Biaya Penginapan Lain|Biaya Transportasi Lain)$/i.test(normalized);
 }
 
 function valueAfterLabel(lines: string[], label: RegExp, maxLookahead = 5) {
