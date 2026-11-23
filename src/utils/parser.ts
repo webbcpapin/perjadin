@@ -200,15 +200,8 @@ export function parseDetailPertanggungjawaban(text: string): ParsedData | null {
       continue;
     }
 
-    // Accept copied table rows even when the source omits the geotag section marker.
-    const directGeotag = line.match(/^(\d{2}-\d{2}-\d{4})\s+(\d{1,2}:\d{2})\s+(.+)$/);
-    if (directGeotag) {
-      const next = lines[index + 1] || '';
-      const address = next && !isLabel(next) && !/^(?:\d{2}-\d{2}-\d{4}\s+\d{1,2}:\d{2}|Pelaksana SPD|Nomor SPD|NIP|Ringkasan)/i.test(next) ? next : '';
-      result.geotags.push({ hariTanggal: directGeotag[1], waktuTagging: directGeotag[2], wilayahTagging: directGeotag[3], lokasiTagging: address });
-      if (address) index++;
-      continue;
-    }
+    // A complete dated row can also start a copied table without its heading.
+    if (/^\d{2}-\d{2}-\d{4}\s+\d{1,2}:\d{2}\s+\S/.test(line)) inGeotagSection = true;
 
     if (!inGeotagSection) continue;
 
@@ -218,7 +211,7 @@ export function parseDetailPertanggungjawaban(text: string): ParsedData | null {
     const v2 = line.match(/^(?:(\d{2}-\d{2}-\d{4})\s+)?(\d{1,2}:\d{2})\s+(.+)$/);
     if (v2 && /^\d{2}-\d{2}-\d{4}$/.test(lastHariTanggal)) {
       const next = lines[index + 1] || '';
-      const address = next && !isLabel(next) && !/^(?:\d|Pelaksana SPD|Nomor SPD|NIP|[-]+|GEOTAG)/i.test(next) ? next : '';
+      const address = next && !isLabel(next) && !/^(?:\d{2}-\d{2}-\d{4}\b|\d{1,2}[:.]\d{2}\b|Pelaksana SPD|Nomor SPD|NIP|[-]+|GEOTAG)/i.test(next) ? next : '';
       result.geotags.push({ hariTanggal: lastHariTanggal, waktuTagging: v2[2], wilayahTagging: v2[3], lokasiTagging: address });
       if (address) index++;
       continue;
@@ -231,6 +224,7 @@ export function parseDetailPertanggungjawaban(text: string): ParsedData | null {
       /^\d+\s*[–-]\s*\d+\s+of\s+\d+$/i.test(line)
     ) {
       inGeotagSection = false;
+      lastHariTanggal = '';
       continue;
     }
 
