@@ -199,6 +199,36 @@
     await writeState(state);
     return { ok: true, indexed: items.length, totalIndexed: state.index.length };
   }
+
+  async function indexAllPages(maxPages = 100) {
+    if (running) return { ok: false, reason: 'Proses lain masih berjalan.' };
+    if (!getListTable()) return { ok: false, reason: 'Buka daftar SPD terlebih dahulu.' };
+    running = true; stopRequested = false;
+    let pages = 0, lastResult = { totalIndexed: 0 };
+    try {
+      for (; pages < maxPages && !stopRequested; pages++) {
+        lastResult = await indexCurrentPage();
+        await progress({ state:'indexing', pagesIndexed: pages + 1, indexed: lastResult.totalIndexed });
+        const next = document.querySelector('button[aria-label="Next page"]:not(:disabled)')
+          || [...document.querySelectorAll('button')].find((el) =>
+            /^(Berikutnya|Next page)$/i.test(textOf(el)) && !el.disabled);
+        if (!next) break;
+        const before = listSignature();
+        next.click();
+        await waitUntil(() => listSignature() && listSignature() !== before, 'halaman daftar berikutnya');
+        await sleep(200);
+      }
+      await progress({ state: stopRequested ? 'paused' : 'completed',
+        pagesIndexed: pages + 1, indexed: lastResult.totalIndexed,
+        message: stopRequested ? 'Pengindeksan dihentikan' : 'Pengindeksan selesai' });
+      return { ok:true, pagesIndexed: pages + 1, indexed:lastResult.totalIndexed };
+    } catch (e) {
+      const reason = e.message || String(e);
+      await progress({ state:'paused', pagesIndexed: pages + 1, error: reason });
+      return { ok:false, pagesIndexed:pages + 1, reason };
+    } finally { running = false; }
+  }
+
   async function storeDetail(record, extra = {}) {
     const state = await readState();
     const key = [record.idKegiatan, record.nomorSPD].filter(Boolean).join('|').toLowerCase();
@@ -290,7 +320,7 @@
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, respond) => {
-    if (!message || !['RUN_PILOT_V2', 'STOP_PILOT_V2', 'CAPTURE_DETAIL_V2', 'CAPTURE_INDEX_V2'].includes(message.type)) return false;
+    if (!message || !['RUN_PILOT_V2', 'STOP_PILOT_V2', 'CAPTURE_DETAIL_V2', 'CAPTURE_INDEX_V2', 'CAPTURE_INDEX_ALL_V2'].includes(message.type)) return false;
     if (message.type === 'STOP_PILOT_V2') {
       stopRequested = true;
       respond({ ok: true, message: 'Perintah berhenti diterima.' });
@@ -299,7 +329,9 @@
     const job = message.type === 'RUN_PILOT_V2' ? pilot(message)
       : message.type === 'CAPTURE_DETAIL_V2'
         ? captureDetail().then(storeDetail)
-        : indexCurrentPage();
+        : message.type === 'CAPTURE_INDEX_ALL_V2'
+          ? indexAllPages()
+          : indexCurrentPage();
     Promise.resolve(job).then(respond).catch((error) => respond({ ok: false, reason: error.message || String(error) }));
     return true;
   });
