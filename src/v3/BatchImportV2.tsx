@@ -3,10 +3,11 @@ import { budgetAccounts, findBudgetAccount } from '../data/perjadinAccounts';
 import { inferDestinationFromGeotags, selectRequiredGeotagPoints } from '../utils/geotagRules';
 import { parseEPerjadinV3 } from './parserV3';
 import { readApiResponse } from './apiClient';
+import { parseMasterCsv } from './masterCsv';
 
-type PilotEntry = { rawText: string; sourceKey?: string; idKegiatan?: string; nomorSPD?: string; sourceUrl?: string; sourceHash?: string; changeType?: string; warnings?: string[] };
+type PilotEntry = { rawText: string; sourceKey?: string; idKegiatan?: string; nomorSPD?: string; sourceUrl?: string; sourceHash?: string; changeType?: string; presenceRows?: number; presensiStatus?: string; warnings?: string[] };
 type Comparison = { state: 'baru' | 'sama' | 'berubah' | 'perlu-review'; oldHash: string; note: string };
-type PilotIndex = { sourceKey: string; idKegiatan?: string; nomorST?: string; nomorSPD?: string; statusSumber?: string; rawText?: string };
+type PilotIndex = { sourceKey: string; idKegiatan?: string; nomorST?: string; nomorSPD?: string; jenisIndeks?: string; statusSumber?: string; rawText?: string };
 type PilotFile = { schemaVersion: number; source: string; collector: string; records: PilotEntry[]; index?: PilotIndex[] };
 type Feedback = Record<string, string>;
 const formatMoney = (value: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(value || 0);
@@ -29,6 +30,9 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
   const [comparisonReady, setComparisonReady] = useState(false);
   const [selectedUpdates, setSelectedUpdates] = useState<Record<string, boolean>>({});
   const [checking, setChecking] = useState(false);
+  const [localMaster, setLocalMaster] = useState<Record<string, unknown>[]>([]);
+  const [localMasterName, setLocalMasterName] = useState('');
+  const [comparisonMode, setComparisonMode] = useState<'live' | 'file' | ''>('');
 
   const records = useMemo(() => entries.map((entry, i) => {
     const parsed = parseEPerjadinV3(entry.rawText);
@@ -41,8 +45,14 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
     if (!parsed?.components.length) issues.push('Rincian komponen belum terbaca');
     if (!official || Math.abs(sent - official) >= 1) issues.push('Nilai komponen belum cocok');
     if (!akun) issues.push('Pilih akun anggaran');
-    if (entry.warnings?.length) issues.push(...entry.warnings);
-    return { key, parsed, sent, official, akun, issues, sourceUrl: entry.sourceUrl };
+    const presensiNotes = (entry.warnings || []).filter((w) => /presensi|tagging|geotag/i.test(w));
+    const otherWarnings = (entry.warnings || []).filter((w) => !/presensi|tagging|geotag/i.test(w));
+    issues.push(...otherWarnings);
+    const presensiNote = entry.presensiStatus === 'TIDAK_ADA_DATA'
+      ? 'Sumber belum menampilkan titik presensi.'
+      : entry.presensiStatus === 'GAGAL_BACA' || presensiNotes.length
+        ? 'Presensi perlu diperiksa atau diambil ulang.' : '';
+    return { key, parsed, sent, official, akun, issues, presensiNote, sourceUrl: entry.sourceUrl };
   }), [entries, accounts]);
 
   const uniqueRecords = useMemo(() => {
@@ -55,7 +65,7 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
   }, [records]);
 
   async function loadFile(file?: File) {
-    setEntries([]); setIndexEntries([]); setFeedback({}); setError(''); setResult(''); setReviewed(false); setAccounts({}); setComparison({}); setComparisonReady(false); setSelectedUpdates({});
+    setEntries([]); setIndexEntries([]); setFeedback({}); setError(''); setResult(''); setReviewed(false); setAccounts({}); setComparison({}); setComparisonReady(false); setSelectedUpdates({}); setComparisonMode('');
     if (!file) return;
     if (file.size > 25 * 1024 * 1024) return setError('Berkas maksimal 25 MB. Simpan hasil kolektor dalam beberapa file jika lebih besar.');
     try {
@@ -74,6 +84,20 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
   }
 
 
+  async function loadLocalMaster(file?: File) {
+    setLocalMaster([]); setLocalMasterName(''); setComparison({}); setComparisonReady(false); setReviewed(false);
+    setComparisonMode(''); setError('');
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) return setError('CSV Master maksimal 8 MB.');
+    try {
+      if (!/\.csv$/i.test(file.name)) throw new Error('Ekspor tab EPERJADIN_V4 ke format .csv terlebih dahulu.');
+      const rows = parseMasterCsv(await file.text());
+      setLocalMaster(rows); setLocalMasterName(file.name);
+      setResult(rows.length + ' baris Master tersedia untuk perbandingan lokal. Tidak ada data yang diunggah.');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    }
+  }
   function parseMoney(value: unknown): number {
     if (typeof value === 'number') return value;
     const str = String(value ?? '').replace(/[^\d.,-]/g,'');
@@ -100,12 +124,15 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
   async function compareMaster() {
     setChecking(true); setError(''); setComparisonReady(false); setComparison({}); setSelectedUpdates({});
     try {
-      const payload = await masterSnapshot();
+      const live = Boolean(authIdToken);
+      if (!live && !localMaster.length) throw new Error('Pilih file CSV Master terlebih dahulu atau masuk ke backend V5.');
+      const payload = live ? await masterSnapshot() : null;
+      const sourceRows = live ? payload!.data as Record<string, unknown>[] : localMaster;
       const master = new Map<string, Record<string, unknown>>(
-        (payload.data as Record<string, unknown>[]).map((r) => [String(r['Kunci SPD'] || '').toLowerCase().trim(), r])
+        sourceRows.map((r) => [String(r['Kunci SPD'] || '').toLowerCase().trim(), r])
       );
       const counts = new Map<string, number>();
-      (payload.components as Record<string, unknown>[]).forEach((r) => {
+      if (live) (payload!.components as Record<string, unknown>[]).forEach((r) => {
         const key = String(r['Kunci SPD'] || '').toLowerCase().trim();
         counts.set(key, (counts.get(key) || 0) + 1);
       });
@@ -120,15 +147,16 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
         if (oldHash && entry?.sourceHash) {
           found[item.key] = { state: oldHash === entry.sourceHash ? 'sama' : 'berubah',
             oldHash, note: oldHash === entry.sourceHash ? 'Hash tidak berubah' : 'Hash sumber berubah' };
-        } else if (Math.abs(parseMoney(old['Total Pengeluaran Riil']) - item.official) >= 1 ||
-                   (counts.get(item.key) || 0) !== (item.parsed?.components.length || 0)) {
-          found[item.key] = { state:'berubah', oldHash, note:'Nilai atau jumlah komponen berbeda' };
+        } else if (Math.abs(parseMoney(old['Total Pengeluaran Riil']) - item.official) >= 1) {
+          found[item.key] = { state:'berubah', oldHash, note:'Nilai total berbeda. Periksa sebelum memperbarui.' };
+        } else if (live && (counts.get(item.key) || 0) !== (item.parsed?.components.length || 0)) {
+          found[item.key] = { state:'berubah', oldHash, note:'Jumlah komponen berbeda. Periksa rincian.' };
         } else {
-          found[item.key] = { state:'perlu-review', oldHash, note:'Master belum memiliki hash pembanding; tidak otomatis ditimpa' };
+          found[item.key] = { state:'perlu-review', oldHash, note:'Nilai sama, tetapi rincian belum dapat dipastikan karena tidak ada hash pembanding.' };
         }
       });
       setComparison(found); setAccounts((current) => ({ ...savedAccounts, ...current }));
-      setReviewed(false); setComparisonReady(true);
+      setReviewed(false); setComparisonReady(true); setComparisonMode(live ? 'live' : 'file');
       const sizes = { baru:0, berubah:0, sama:0, 'perlu-review':0 };
       Object.values(found).forEach((c) => sizes[c.state]++);
       setResult('Hasil: '+sizes.baru+' baru, '+sizes.berubah+' berubah, '+sizes.sama+
@@ -139,8 +167,8 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
   }
 
   async function saveBatch() {
-    if (!reviewed || saving || !endpoint.trim() || !comparisonReady) return;
-    if (!authIdToken) return setError('Untuk menyimpan batch, aktifkan backend V5 dan login Google terlebih dahulu. Pratinjau JSON tetap bisa digunakan.');
+    if (!reviewed || saving || !endpoint.trim() || !comparisonReady || comparisonMode !== 'live') return;
+    if (!authIdToken) return setError('Penyimpanan membutuhkan backend V5 dengan login Google. Perbandingan file lokal hanya untuk pemeriksaan.');
     setSaving(true); setResult('Membaca daftar SPD yang sudah ada di Master...'); setError('');
     const nextFeedback: Feedback = {};
     try {
@@ -166,7 +194,7 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
           nextFeedback[item.key] = 'Dilewati: SPD sudah ditambahkan pihak lain'; skipped++; continue;
         }
         if (state.state === 'berubah') {
-          if (!selectedUpdates[item.key] || !current ||
+          if (!selectedUpdates[item.key] || !current || !state.oldHash ||
               String(current['Raw Hash'] || '').trim() !== state.oldHash) {
             nextFeedback[item.key] = 'Dilewati: pembaruan tidak disetujui atau snapshot berubah';
             skipped++; continue;
@@ -242,8 +270,12 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
         </div>
       </div>}
       {!!entries.length && <>
-        <p className="mt-4 text-sm font-semibold">{uniqueRecords.length} SPD unik, {importable} memenuhi validasi, {uniqueRecords.length-importable} perlu diperiksa</p>
-        <button type="button" onClick={() => void compareMaster()} disabled={checking || !authIdToken} className="mt-3 rounded-md border border-blue-700 px-3 py-2 text-sm text-blue-700 disabled:opacity-50">{checking ? 'Memeriksa Master...' : 'Bandingkan dengan Master'}</button>
+        <p className="mt-4 text-sm font-semibold">{uniqueRecords.length} SPD unik, {importable} siap secara keuangan, {uniqueRecords.length-importable} memerlukan perbaikan nilai atau identitas</p>
+        <label className="mt-3 block text-xs font-semibold">Bandingkan secara lokal menggunakan ekspor CSV tab EPERJADIN_V4
+          <input type="file" accept=".csv,text/csv" onChange={(e) => void loadLocalMaster(e.target.files?.[0])} className="mt-1 block w-full rounded-md border p-2 font-normal" />
+        </label>
+        {!!localMasterName && <p className="mt-1 text-xs text-slate-500">File lokal: {localMasterName} ({localMaster.length} baris). Tidak dikirim ke server.</p>}
+        <button type="button" onClick={() => void compareMaster()} disabled={checking || (!authIdToken && !localMaster.length)} className="mt-3 rounded-md border border-blue-700 px-3 py-2 text-sm text-blue-700 disabled:opacity-50">{checking ? 'Memeriksa Master...' : 'Bandingkan dengan Master'}</button>
         <div className="mt-3 max-h-[480px] space-y-3 overflow-y-auto">
           {uniqueRecords.map((item) => <article key={item.key} className="rounded-lg border p-3 text-sm">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -261,6 +293,7 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
               </select>
             </label>
             {!!item.issues.length && <p className="mt-2 text-xs text-amber-700">{item.issues.join(' · ')}</p>}
+            {!!item.presensiNote && <p className="mt-2 text-xs text-amber-700">Presensi: {item.presensiNote} Nilai keuangan tetap dapat diperiksa terpisah.</p>}
             {feedback[item.key] && <p className="mt-2 text-xs font-semibold text-blue-700">{feedback[item.key]}</p>}
           </article>)}
         </div>
@@ -268,13 +301,13 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
           <input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.target.checked)} className="mt-1" />
           Saya sudah memeriksa nilai, akun, dan perbandingan. SPD lama diperbarui hanya jika saya memilihnya.
         </label>
-        <button type="button" onClick={() => void saveBatch()} disabled={!reviewed || saving || !importable || !authIdToken || !comparisonReady} className="mt-3 rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">
+        <button type="button" onClick={() => void saveBatch()} disabled={!reviewed || saving || !importable || !authIdToken || !comparisonReady || comparisonMode !== 'live'} className="mt-3 rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">
           {saving ? 'Menyimpan...' : 'Simpan SPD Baru / Berubah Terpilih'}
         </button>
       </>}
       {result && <p className="mt-3 rounded-md bg-blue-50 p-3 text-sm text-blue-700">{result}</p>}
       {error && <p className="mt-3 rounded-md bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
-      <p className="mt-4 text-xs text-slate-500">Ekstensi tidak mengubah transaksi Satu Kemenkeu. Impor dapat diperiksa tanpa login. Penyimpanan batch hanya aktif pada backend V5 dengan identitas Google terverifikasi.</p>
+      <p className="mt-4 text-xs text-slate-500">Perbandingan CSV dilakukan sepenuhnya di browser tanpa login. Tombol Simpan hanya aktif untuk perbandingan langsung melalui backend V5 terautentikasi. Data Master lama tidak ditimpa melalui file CSV.</p>
     </section>
   );
 }
