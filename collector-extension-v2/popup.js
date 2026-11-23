@@ -53,6 +53,7 @@ $('#refresh-existing').onclick = () => runCommand('RUN_PILOT_V2', {
 $('#stop').onclick = () => runCommand('STOP_PILOT_V2');
 $('#single').onclick = () => runCommand('CAPTURE_DETAIL_V2');
 $('#index-page').onclick = () => runCommand('CAPTURE_INDEX_V2');
+$('#index-all').onclick = () => runCommand('CAPTURE_INDEX_ALL_V2');
 async function payload() {
   const state = (await chrome.storage.local.get(STORAGE))[STORAGE] || {};
   return {
