@@ -67,15 +67,14 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
 
   async function saveBatch() {
     if (!reviewed || saving || !endpoint.trim()) return;
+    if (!authIdToken) return setError('Untuk menyimpan batch, aktifkan backend V5 dan login Google terlebih dahulu. Pratinjau JSON tetap bisa digunakan.');
     setSaving(true); setResult('Membaca daftar SPD yang sudah ada di Master...'); setError('');
     const nextFeedback: Feedback = {};
     try {
       const url = endpoint.trim();
-      const response = authIdToken
-        ? await fetch(url, { method: 'POST', headers: { 'Content-Type':'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'getDashboardV4', authIdToken }) })
-        : await fetch(url + (url.includes('?') ? '&' : '?') + 'action=getDashboardV4', { method: 'GET' });
+      const response = await fetch(url, { method: 'POST', headers: { 'Content-Type':'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'getDashboardV4', authIdToken }) });
       const dashboard = await readApiResponse(response);
-      if (!dashboard.success || !Array.isArray(dashboard.data)) throw new Error('Gagal memverifikasi SPD yang sudah tersimpan. Tidak ada data yang dikirim.');
+      if (!dashboard.success || !Array.isArray(dashboard.data) || Number(dashboard.version) !== 5) throw new Error('Batch hanya boleh disimpan melalui backend V5 terautentikasi. Tidak ada data yang dikirim.');
       const existing = new Set(dashboard.data.map((item) => {
         const row = item as Record<string, unknown>;
         return String(row['Kunci SPD'] || '').toLowerCase().trim();
@@ -173,13 +172,13 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
           <input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.target.checked)} className="mt-1" />
           Saya sudah memeriksa kebenaran akun dan nilai. Hanya SPD baru yang boleh disimpan.
         </label>
-        <button type="button" onClick={() => void saveBatch()} disabled={!reviewed || saving || !importable} className="mt-3 rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">
+        <button type="button" onClick={() => void saveBatch()} disabled={!reviewed || saving || !importable || !authIdToken} className="mt-3 rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">
           {saving ? 'Menyimpan data baru...' : 'Simpan SPD baru ke Master'}
         </button>
       </>}
       {result && <p className="mt-3 rounded-md bg-blue-50 p-3 text-sm text-blue-700">{result}</p>}
       {error && <p className="mt-3 rounded-md bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
-      <p className="mt-4 text-xs text-slate-500">Ekstensi tidak mengubah transaksi Satu Kemenkeu. Sinkronisasi ke Master hanya dilakukan setelah tombol Simpan ditekan.</p>
+      <p className="mt-4 text-xs text-slate-500">Ekstensi tidak mengubah transaksi Satu Kemenkeu. Impor dapat diperiksa tanpa login. Penyimpanan batch hanya aktif pada backend V5 dengan identitas Google terverifikasi.</p>
     </section>
   );
 }
