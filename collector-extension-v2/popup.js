@@ -6,7 +6,7 @@ function render(state) {
   const errors = state?.errors || [], index = state?.index || [], stats = state?.stats || {};
   title.textContent = progress.state === 'running'
     ? 'Merekam detail SPD...'
-    : records.length + ' SPD tersimpan lokal, ' + index.length + ' baris terindeks';
+    : records.length + ' SPD detail, ' + index.length + ' entri daftar lokal';
   detail.textContent = [
     progress.error || progress.message || '',
     progress.completed != null ? progress.completed + ' diproses' : '',
