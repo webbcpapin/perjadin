@@ -63,16 +63,9 @@ export default function DashboardV4({ endpoint, authIdToken = '' }: Props) {
           : await fetch(`${url}${separator}action=getDashboardV4`, { method: 'GET' });
         return readApiResponse(response);
       };
-      let payload;
-      try {
-        payload = await request(endpoint.trim() || DEFAULT_V4_ENDPOINT);
-      } catch (firstError) {
-        const current = endpoint.trim();
-        if (current === DEFAULT_V4_ENDPOINT || !/HTML|JSON|login|deployment/i.test(firstError instanceof Error ? firstError.message : String(firstError))) throw firstError;
-        payload = await request(DEFAULT_V4_ENDPOINT);
-      }
+      const payload = await request(endpoint.trim() || DEFAULT_V4_ENDPOINT);
       if (!payload.success || !Array.isArray(payload.data)) throw new Error(String(payload.message || 'Database belum mengembalikan data dashboard.'));
-      localStorage.setItem('eperjadin_webapp_url_v5', DEFAULT_V4_ENDPOINT);
+      // Endpoint dipilih pemilik aplikasi. Tidak fallback diam-diam ke deployment lain.
       setRows(Array.isArray(payload.data) ? payload.data as DashboardRow[] : []);
     } catch (value) {
       setError(value instanceof Error ? value.message : String(value));
