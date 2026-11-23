@@ -18,8 +18,9 @@ Mengurangi kegiatan copy-paste manual dari SATU Kemenkeu tanpa mengubah proses p
 5. Biarkan tab SATU Kemenkeu terbuka. Setelah proses selesai, buka kembali popup untuk melihat jumlah berhasil dan error.
 6. Klik **Unduh JSON**; jangan unggah berkas tersebut ke GitHub atau tempat publik.
 7. Buka https://webbcpapin.github.io/perjadin/ > **Impor Batch Pilot V2**, unggah JSON dan periksa komponen serta akun untuk setiap SPD.
-8. Centang konfirmasi pemeriksaan, lalu **Simpan SPD baru ke Master**. SPD yang sudah ada akan dilewati. Tidak ada pembaruan massal terhadap data existing.
-9. Verifikasi hasil pada tab EPERJADIN_V4 dan EPERJADIN_KOMPONEN. Hapus data lokal pada popup kolektor sesudah digunakan.
+8. Untuk **pratinjau tanpa menyimpan**, langkah 1–7 sudah cukup. Untuk menyimpan batch, administrator harus lebih dahulu mengaktifkan backend V5 dan login Google (bagian keamanan di bawah).
+9. Setelah login V5 berhasil, centang konfirmasi pemeriksaan lalu **Simpan SPD baru ke Master**. SPD yang sudah ada akan dilewati. Tidak ada pembaruan massal terhadap data existing.
+10. Verifikasi hasil pada tab EPERJADIN_V4 dan EPERJADIN_KOMPONEN. Hapus data lokal pada popup kolektor sesudah digunakan.
 
 ## Validasi wajib
 - ID Kegiatan, Nomor SPD dan nama pelaksana terbaca.
