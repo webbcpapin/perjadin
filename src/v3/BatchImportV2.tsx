@@ -11,7 +11,7 @@ type PilotIndex = { sourceKey: string; idKegiatan?: string; nomorST?: string; no
 type PilotFile = { schemaVersion: number; source: string; collector: string; records: PilotEntry[]; index?: PilotIndex[] };
 type Feedback = Record<string, string>;
 const formatMoney = (value: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(value || 0);
-const accepted = /^(Dikirim|Disetujui|Dibayar|Selesai)$/i;
+const accepted = /^(Dikirim|Disetujui(?: PPK)?|Dibayar|Selesai)$/i;
 
 function today() {
   return new Date().toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-');
@@ -250,6 +250,9 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
     }
   }
   const importable = uniqueRecords.filter((r) => !r.issues.length).length;
+  const activityEntries = indexEntries.filter((e) => (e.jenisIndeks || 'kegiatan') === 'kegiatan');
+  const participantEntries = indexEntries.filter((e) => e.jenisIndeks === 'pelaksana-spd');
+  const statusOf = (e: PilotIndex) => e.statusSumber || e.rawText?.match(/Laporan Tersedia|Belum ada laporan/i)?.[0] || 'Status belum tersedia';
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -261,11 +264,12 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
         <input type="file" accept=".json,application/json" onChange={(e) => void loadFile(e.target.files?.[0])} className="mt-2 block w-full rounded-md border p-2 font-normal" />
       </label>
       {!!indexEntries.length && <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
-        <p className="font-semibold">Indeks daftar Satu Kemenkeu: {indexEntries.length} baris, termasuk {indexEntries.filter((e) => /draft/i.test(e.statusSumber || '')).length} status Draft yang terlihat.</p>
+        <p className="font-semibold">Indeks: {activityEntries.length} kegiatan dan {participantEntries.length} pelaksana SPD.</p>
+        <p className="mt-1 text-xs text-slate-600">Status laporan dari daftar kegiatan: {activityEntries.filter((e) => /laporan tersedia/i.test(statusOf(e))).length} tersedia, {activityEntries.filter((e) => /belum ada laporan/i.test(statusOf(e))).length} belum ada laporan. Status Draft SPD hanya muncul pada daftar pelaksana.</p>
         <p className="mt-1 text-xs text-slate-500">Indeks tidak dihitung sebagai transaksi keuangan. Klik impor detail hanya untuk SPD yang benar-benar mempunyai rincian.</p>
         <div className="mt-2 max-h-40 overflow-y-auto text-xs">
           {indexEntries.slice(0, 30).map((e, i) => <div key={e.sourceKey || i} className="border-b py-1">
-            {e.nomorSPD || e.nomorST || e.idKegiatan || 'Tanpa identitas'} · {e.statusSumber || 'Status belum dibaca'}
+            {e.nomorSPD || e.nomorST || e.idKegiatan || 'Tanpa identitas'} · {statusOf(e)}
           </div>)}
         </div>
       </div>}
@@ -280,7 +284,7 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
           {uniqueRecords.map((item) => <article key={item.key} className="rounded-lg border p-3 text-sm">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div><strong>{item.parsed?.nomorSPD || 'Nomor SPD tidak terbaca'}</strong><span className="ml-2 text-slate-500">{item.parsed?.peserta || ''}</span></div>
-              <span className={item.issues.length ? 'text-amber-700' : 'text-emerald-700'}>{item.issues.length ? 'Perlu tinjau' : 'Siap'}</span>
+              <span className={item.issues.length ? 'text-amber-700' : 'text-emerald-700'}>{item.issues.length ? 'Keuangan perlu tinjau' : 'Keuangan cocok'}</span>
             </div>
             <p className="mt-1 text-slate-600">{item.parsed?.namaKegiatan || 'Kegiatan belum terbaca'}</p>
             {comparison[item.key] && <p className="mt-1 text-xs font-semibold text-blue-700">Master: {comparison[item.key].state.toUpperCase()} · {comparison[item.key].note}</p>}
