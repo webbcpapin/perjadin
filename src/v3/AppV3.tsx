@@ -5,6 +5,8 @@ import { budgetAccounts, findBudgetAccount } from '../data/perjadinAccounts';
 import { inferDestinationFromGeotags, selectRequiredGeotagPoints } from '../utils/geotagRules';
 import { parseEPerjadinV3 } from './parserV3';
 import DashboardV4 from './DashboardV4';
+import BatchImportV2 from './BatchImportV2';
+import GoogleLoginV5 from './GoogleLoginV5';
 
 const DEFAULT_WEBAPP_URL =
   'https://script.google.com/macros/s/AKfycbzPBI2tql2DyCLnNUJIThuAEKz3aRHZhmXDUcwxSY-lSOmFm9zzHarNpThW9PhTJbRY/exec';
@@ -55,6 +57,10 @@ export default function AppV3() {
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'checking' | 'ok' | 'error'>('idle');
   const [connectionMessage, setConnectionMessage] = useState('');
   const [view, setView] = useState<'parser' | 'dashboard'>('dashboard');
+  const [showBatch, setShowBatch] = useState(false);
+  const [googleClientId, setGoogleClientId] = useState(() => localStorage.getItem('eperjadin_oauth_client_id') || '');
+  const [googleIdToken, setGoogleIdToken] = useState('');
+  function changeClientId(value: string) { localStorage.setItem('eperjadin_oauth_client_id', value); setGoogleClientId(value); }
 
   const parsed = useMemo(() => parseEPerjadinV3(raw), [raw]);
   const detectedDestination = useMemo(() => {
@@ -93,7 +99,7 @@ export default function AppV3() {
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'getDashboardV4' }),
+        body: JSON.stringify({ action: 'getDashboardV4', authIdToken: googleIdToken }),
       });
       const payload = await parseApiPayload(response);
       if (!payload.success) throw new Error(payload.message || 'Koneksi database tidak berhasil.');
@@ -181,7 +187,7 @@ export default function AppV3() {
       const response = await fetch(endpoint.trim(), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'upsertPerjadinV4', row }),
+        body: JSON.stringify({ action: 'upsertPerjadinV4', row, authIdToken: googleIdToken }),
       });
       const payload = await parseApiPayload(response);
       if (!payload.success) throw new Error(payload.message || 'Gagal menyimpan data.');
@@ -204,11 +210,11 @@ export default function AppV3() {
           <div className="mx-auto max-w-7xl px-5 py-5">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-700">ePerjadin Workspace</p><h1 className="mt-1 text-2xl font-semibold">Monitoring Perjalanan Dinas</h1><p className="mt-1 text-sm text-slate-500">Dashboard internal untuk memantau proses SPD dan kelengkapan pegawai.</p></div>
-              <button type="button" onClick={() => setView('parser')} className="rounded-lg border border-blue-700 px-4 py-2 text-sm font-semibold text-blue-700">Buka input parser</button>
+              <div className="flex flex-wrap gap-2"><button type="button" onClick={() => { setShowBatch(true); setView('parser'); }} className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white">Impor Batch Pilot V2</button><button type="button" onClick={() => { setShowBatch(false); setView('parser'); }} className="rounded-lg border border-blue-700 px-4 py-2 text-sm font-semibold text-blue-700">Buka input parser</button></div>
             </div>
           </div>
         </header>
-        <div className="mx-auto max-w-7xl p-5"><DashboardV4 endpoint={endpoint} /></div>
+        <div className="mx-auto max-w-7xl space-y-3 p-5"><GoogleLoginV5 clientId={googleClientId} token={googleIdToken} onClientId={changeClientId} onToken={setGoogleIdToken} /><DashboardV4 endpoint={endpoint} authIdToken={googleIdToken} /></div>
       </main>
     );
   }
@@ -229,6 +235,7 @@ export default function AppV3() {
       </header>
 
       <section className="mx-auto max-w-7xl space-y-5 p-5">
+        {showBatch && <BatchImportV2 endpoint={endpoint} authIdToken={googleIdToken} onClose={() => setShowBatch(false)} />}
         <div className="grid gap-4 lg:grid-cols-[1.25fr_.75fr]">
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-3 flex items-center gap-2">
@@ -244,6 +251,7 @@ export default function AppV3() {
           </section>
 
           <aside className="space-y-4">
+            <GoogleLoginV5 clientId={googleClientId} token={googleIdToken} onClientId={changeClientId} onToken={setGoogleIdToken} />
             <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-3 flex items-center gap-2">
                 <Database className="h-5 w-5 text-blue-700" />

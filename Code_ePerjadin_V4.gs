@@ -143,6 +143,17 @@ function upsertPerjadinV4_(input) {
     const routeSheet = ss.getSheetByName(V4_ROUTE_SHEET);
     const presenceSheet = ss.getSheetByName(V4_PRESENCE_SHEET);
 
+    // Catatan monitoring yang dimasukkan manusia tetap dipertahankan saat sumber disinkron ulang.
+    const priorRow = findRowByValueV4_(summarySheet, 'Kunci SPD', normalized.kunciSPD);
+    if (priorRow) {
+      const map = headerMapV4_(summarySheet);
+      const old = summarySheet.getRange(priorRow, 1, 1, summarySheet.getLastColumn()).getValues()[0];
+      const getOld = function(name) { return map[name] === undefined ? '' : textV4_(old[map[name]]); };
+      normalized.statusPJ = getOld('Status Pertanggungjawaban') || normalized.statusPJ;
+      normalized.kekuranganDokumen = getOld('Kekurangan Dokumen') || normalized.kekuranganDokumen;
+      normalized.dokumenPendukung = getOld('Dokumen Pendukung') || normalized.dokumenPendukung;
+    }
+
     const summaryRow = buildSummaryObjectV4_(normalized);
     const targetRow = upsertObjectByKeyV4_(summarySheet, V4_SUMMARY_HEADERS, 'Kunci SPD', normalized.kunciSPD, summaryRow);
 
@@ -223,6 +234,8 @@ function normalizePayloadV4_(r) {
     kodeAkun: textV4_(r.kodeAkun),
     namaAkun: textV4_(r.namaAkun) || lookupAccountNameV4_(r.kodeAkun),
     statusPJ: textV4_(r.statusPJ || r.statusPertanggungjawaban) || 'Belum Ditentukan',
+    kekuranganDokumen: textV4_(r.kekuranganDokumen),
+    dokumenPendukung: textV4_(r.dokumenPendukung),
     statusGeotag: textV4_(r.statusGeotag) || 'Belum Dinilai',
     start: textV4_(r.start),
     clockIn: textV4_(r.clockIn),
@@ -440,7 +453,14 @@ function replaceChildrenV4_(sh, headers, parentKeyHeader, parentKey, objects) {
 }
 
 function applySummaryFormulasV4_(sh, row) {
-  sh.getRange(row, 21).setFormula('=IF($A' + row + '="","",SUMIF(' + V4_COMPONENT_SHEET + '!$B:$B,$A' + row + ',' + V4_COMPONENT_SHEET + '!$I:$I))');
+  // Hanya komponen yang telah disampaikan/disetujui dihitung. Draft/ditolak dikecualikan.
+  const statuses = ['Dikirim','Disetujui','Disetujui PPK','Dibayar','Selesai'];
+  const sums = statuses.map(function(status) {
+    return 'SUMIFS(' + V4_COMPONENT_SHEET + '!$I:$I,' +
+      V4_COMPONENT_SHEET + '!$B:$B,$A' + row + ',' +
+      V4_COMPONENT_SHEET + '!$H:$H,"' + status + '")';
+  });
+  sh.getRange(row, 21).setFormula('=IF($A' + row + '="","",' + sums.join('+') + ')');
   sh.getRange(row, 22).setFormula('=IF($A' + row + '="","",$T' + row + '-$U' + row + ')');
   sh.getRange(row, 23).setFormula('=IF($A' + row + '="","",IF(ABS($V' + row + ')<1,"VALID","CEK"))');
 }
@@ -507,7 +527,7 @@ function headerMapV4_(sh) {
 
 function isSentStatusV4_(status) {
   const s = textV4_(status).toLowerCase();
-  return s === 'dikirim' || s === 'disetujui' || s === 'dibayar' || s === 'selesai';
+  return s === 'dikirim' || s === 'disetujui' || s === 'disetujui ppk' || s === 'dibayar' || s === 'selesai';
 }
 
 function parseBodyV4_(e) {

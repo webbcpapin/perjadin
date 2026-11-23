@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Kolektor ePerjadin V2 (Pilot)",
+  "version": "2.0.0",
+  "description": "Pilot pengambilan detail SPD melalui halaman resmi yang sedang login. Tanpa pengiriman otomatis.",
+  "permissions": ["activeTab", "storage", "clipboardWrite"],
+  "host_permissions": ["https://satu.kemenkeu.go.id/*"],
+  "action": { "default_title": "Kolektor ePerjadin V2", "default_popup": "popup.html" },
+  "content_scripts": [{
+    "matches": ["https://satu.kemenkeu.go.id/*"],
+    "js": ["content-script.js"],
+    "run_at": "document_idle"
+  }]
+}
