@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Kolektor ePerjadin V2.2 (Lokal)",
-  "version": "2.2.0",
-  "description": "Ekstraksi lokal SPD, validasi presensi kosong, dan indeks status laporan kegiatan.",
+  "name": "Kolektor ePerjadin V2.3 (Lokal)",
+  "version": "2.3.0",
+  "description": "Pengambilan lokal kegiatan, pelaksana, detail SPD dan presensi dengan progres yang dapat dilanjutkan.",
   "permissions": [
     "activeTab",
     "storage",
@@ -21,6 +21,7 @@
         "https://satu.kemenkeu.go.id/*"
       ],
       "js": [
+        "collector-core.js",
         "content-script.js"
       ],
       "run_at": "document_idle"

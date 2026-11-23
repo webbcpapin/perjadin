@@ -9,11 +9,13 @@ function render(state) {
     : records.length + ' SPD detail, ' + index.length + ' entri daftar lokal';
   detail.textContent = [
     progress.error || progress.message || '',
-    progress.completed != null ? progress.completed + ' diproses' : '',
-    progress.skipped ? progress.skipped + ' dilewati' : '',
+    progress.completed != null ? progress.completed + ' berhasil' : '',
+    progress.skipped != null ? progress.skipped + ' dilewati' : '',
+    progress.failed != null ? progress.failed + ' gagal' : '',
     errors.length ? errors.length + ' catatan kendala' : '',
     (stats.new || 0) + ' baru', (stats.changed || 0) + ' berubah', (stats.unchanged || 0) + ' tetap'
   ].filter(Boolean).join(' · ');
+  $('#resume').disabled = !state?.run || progress.state === 'completed';
   $('#export').disabled = records.length === 0 && index.length === 0;
   $('#copy').disabled = records.length === 0 && index.length === 0;
   $('#csv').disabled = records.length === 0;
@@ -33,7 +35,7 @@ async function runCommand(type, payload = {}) {
   title.textContent = 'Proses dimulai...';
   try {
     const tab = await activeTab();
-    const result = await chrome.tabs.sendMessage(tab.id, { type, ...payload });
+    const result = await chrome.tabs.sendMessage(tab.id, { type, tabId: tab.id, ...payload });
     await refresh();
     if (result?.ok === false) {
       title.textContent = 'Perlu pemeriksaan';
@@ -41,14 +43,16 @@ async function runCommand(type, payload = {}) {
     }
   } catch (error) {
     title.textContent = 'Tidak dapat melanjutkan';
-    detail.textContent = error.message || String(error);
+    detail.textContent = 'Periksa tab SATU. Jika halaman dimuat ulang, pilih Lanjutkan pada tab asal.';
+    await refresh();
   }
 }
 $('#start').onclick = () => runCommand('RUN_PILOT_V2', {
-  limit: Number($('#limit').value), maxPages: 5, refreshExisting: false
+  limit: Number($('#limit').value), refreshExisting: false
 });
+$('#resume').onclick = () => runCommand('RUN_PILOT_V2', { limit: Number($('#limit').value), resume: true });
 $('#refresh-existing').onclick = () => runCommand('RUN_PILOT_V2', {
-  limit: Number($('#limit').value), maxPages: 5, refreshExisting: true
+  limit: Number($('#limit').value), refreshExisting: true
 });
 $('#stop').onclick = () => runCommand('STOP_PILOT_V2');
 $('#single').onclick = () => runCommand('CAPTURE_DETAIL_V2');
@@ -73,7 +77,7 @@ function downloadBlob(blob, filename) {
 $('#export').onclick = async () => {
   const data = await payload();
   downloadBlob(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }),
-    'eperjadin-v21-' + new Date().toISOString().slice(0, 10) + '.json');
+    'eperjadin-v23-' + new Date().toISOString().slice(0, 10) + '.json');
 };
 $('#copy').onclick = async () => {
   await navigator.clipboard.writeText(JSON.stringify(await payload()));

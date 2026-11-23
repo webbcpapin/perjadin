@@ -1,13 +1,12 @@
 import { useMemo, useState } from 'react';
 import { budgetAccounts, findBudgetAccount } from '../data/perjadinAccounts';
-import { inferDestinationFromGeotags, selectRequiredGeotagPoints } from '../utils/geotagRules';
+import { selectRequiredGeotagPoints } from '../utils/geotagRules';
 import { parseEPerjadinV3 } from './parserV3';
-import { readApiResponse } from './apiClient';
-import { parseMasterCsv } from './masterCsv';
+import { appsScriptEndpoint, readApiResponse, verifyV5Endpoint } from './apiClient';
+import { compareWithMaster, indexMaster, parseMasterCsv, type MasterComparison } from './masterCsv';
 
-type PilotEntry = { rawText: string; sourceKey?: string; idKegiatan?: string; nomorSPD?: string; sourceUrl?: string; sourceHash?: string; changeType?: string; presenceRows?: number; presensiStatus?: string; warnings?: string[] };
-type Comparison = { state: 'baru' | 'sama' | 'berubah' | 'perlu-review'; oldHash: string; note: string };
-type PilotIndex = { sourceKey: string; idKegiatan?: string; nomorST?: string; nomorSPD?: string; jenisIndeks?: string; statusSumber?: string; rawText?: string };
+type PilotEntry = { rawText: string; idKegiatan?: string; nomorSPD?: string; sourceHash?: string; presensiStatus?: string; warnings?: string[] };
+type PilotIndex = { sourceKey: string; idKegiatan?: string; nomorST?: string; nomorSPD?: string; namaPegawai?: string; jenisIndeks?: string; statusSumber?: string; rawText?: string; statusKegiatan?: string; statusLaporan?: string; statusSPD?: string };
 type PilotFile = { schemaVersion: number; source: string; collector: string; records: PilotEntry[]; index?: PilotIndex[] };
 type Feedback = Record<string, string>;
 const formatMoney = (value: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(value || 0);
@@ -26,42 +25,62 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
   const [saving, setSaving] = useState(false);
   const [reviewed, setReviewed] = useState(false);
   const [result, setResult] = useState('');
-  const [comparison, setComparison] = useState<Record<string, Comparison>>({});
+  const [comparison, setComparison] = useState<Record<string, MasterComparison>>({});
   const [comparisonReady, setComparisonReady] = useState(false);
   const [selectedUpdates, setSelectedUpdates] = useState<Record<string, boolean>>({});
   const [checking, setChecking] = useState(false);
   const [localMaster, setLocalMaster] = useState<Record<string, unknown>[]>([]);
   const [localMasterName, setLocalMasterName] = useState('');
   const [comparisonMode, setComparisonMode] = useState<'live' | 'file' | ''>('');
+  const [comparisonEndpoint, setComparisonEndpoint] = useState('');
 
   const records = useMemo(() => entries.map((entry, i) => {
     const parsed = parseEPerjadinV3(entry.rawText);
     const key = parsed?.idKegiatan && parsed?.nomorSPD ? (parsed.idKegiatan + '|' + parsed.nomorSPD).toLowerCase() : 'invalid-' + i;
     const sent = parsed?.components.filter((c) => accepted.test(c.status)).reduce((sum, c) => sum + c.nilaiRiil, 0) || 0;
-    const official = parsed?.totalPengeluaranRiil || 0;
+    const official = parsed?.totalPengeluaranRiilResmi ?? null;
     const akun = findBudgetAccount(parsed?.kodeAkun || accounts[key] || '');
     const issues = [];
     if (!parsed?.idKegiatan || !parsed?.nomorSPD || !parsed?.peserta) issues.push('Identitas SPD belum terbaca');
     if (!parsed?.components.length) issues.push('Rincian komponen belum terbaca');
-    if (!official || Math.abs(sent - official) >= 1) issues.push('Nilai komponen belum cocok');
+    if (official === null) issues.push('Total pengeluaran resmi belum terbaca');
+    else if (Math.round(sent * 100) !== Math.round(official * 100)) issues.push('Nilai komponen belum cocok');
+    if (parsed?.components.some((component) => component.nilaiRiilTerbaca === false)) issues.push('Ada nominal komponen yang belum terbaca');
+    if (parsed && (!parsed.routes.length || parsed.routes.length !== parsed.jumlahRute)) issues.push('Sebagian rute belum terbaca');
+    if (entry.idKegiatan && entry.nomorSPD && (entry.idKegiatan + '|' + entry.nomorSPD).toLowerCase() !== key) {
+      issues.push('Identitas rekaman berbeda dengan isi detail');
+    }
     if (!akun) issues.push('Pilih akun anggaran');
     const presensiNotes = (entry.warnings || []).filter((w) => /presensi|tagging|geotag/i.test(w));
     const otherWarnings = (entry.warnings || []).filter((w) => !/presensi|tagging|geotag/i.test(w));
     issues.push(...otherWarnings);
+    const geo = parsed?.tujuan && parsed.tanggalKegiatan && parsed.jumlahRute === 1
+      && entry.presensiStatus !== 'GAGAL_BACA' && entry.presensiStatus !== 'TIDAK_ADA_DATA'
+      ? selectRequiredGeotagPoints(parsed.geotags, parsed.tanggalKegiatan, parsed.tujuan) : null;
     const presensiNote = entry.presensiStatus === 'TIDAK_ADA_DATA'
       ? 'Sumber belum menampilkan titik presensi.'
       : entry.presensiStatus === 'GAGAL_BACA' || presensiNotes.length
-        ? 'Presensi perlu diperiksa atau diambil ulang.' : '';
-    return { key, parsed, sent, official, akun, issues, presensiNote, sourceUrl: entry.sourceUrl };
+        ? 'Presensi perlu diperiksa atau diambil ulang.'
+        : geo ? geo.issues.map((issue) => issue.message).join(' ') : 'Periksa rute dan jadwal presensi sebelum menetapkan kelengkapan.';
+    return { key, parsed, sent, official, akun, issues, presensiNote, geo, entry };
   }), [entries, accounts]);
 
   const uniqueRecords = useMemo(() => {
-    const seen = new Set<string>();
+    const seen = new Map<string, string>();
+    const conflicting = new Set<string>();
+    for (const record of records) {
+      const raw = seen.get(record.key);
+      if (raw !== undefined && raw !== record.entry.rawText) conflicting.add(record.key);
+      else seen.set(record.key, record.entry.rawText);
+    }
+    seen.clear();
     return records.filter((r) => {
       if (seen.has(r.key)) return false;
-      seen.add(r.key);
+      seen.set(r.key, r.entry.rawText);
       return true;
-    });
+    }).map((record) => conflicting.has(record.key) ? {
+      ...record, issues: [...record.issues, 'Dua rekaman SPD ini berisi detail berbeda. Ambil ulang.'],
+    } : record);
   }, [records]);
 
   async function loadFile(file?: File) {
@@ -73,9 +92,13 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
       if (data.source !== 'satu-kemenkeu' || data.schemaVersion !== 2 || data.collector !== 'pilot-v2' || !Array.isArray(data.records)) {
         throw new Error('Gunakan file JSON dari Kolektor ePerjadin V2.');
       }
+      if (data.index !== undefined && (!Array.isArray(data.index) || data.index.some((e) => !e || typeof e.sourceKey !== 'string'))) {
+        throw new Error('Format indeks tidak valid.');
+      }
       if (!data.records.length && !data.index?.length) throw new Error('JSON tidak berisi detail atau indeks SPD.');
       if (data.records.length > 1000) throw new Error('Berkas berisi lebih dari 1.000 SPD, pecah menjadi beberapa batch.');
-      if (data.records.some((r) => typeof r.rawText !== 'string' || r.rawText.length > 120000)) {
+      if (data.records.some((r) => !r || typeof r.rawText !== 'string' || r.rawText.length > 120000 ||
+          (r.warnings !== undefined && (!Array.isArray(r.warnings) || r.warnings.some((w) => typeof w !== 'string'))))) {
         throw new Error('Format detail tidak valid atau terlalu besar.');
       }
       setEntries(data.records);
@@ -98,19 +121,10 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
       setError(error instanceof Error ? error.message : String(error));
     }
   }
-  function parseMoney(value: unknown): number {
-    if (typeof value === 'number') return value;
-    const str = String(value ?? '').replace(/[^\d.,-]/g,'');
-    if (!str) return 0;
-    const decimal = Math.max(str.lastIndexOf('.'), str.lastIndexOf(','));
-    if (decimal >= 0 && str.length - decimal - 1 === 2) {
-      return Number(str.slice(0,decimal).replace(/[.,]/g,'')+'.'+str.slice(decimal+1)) || 0;
-    }
-    return Number(str.replace(/[.,]/g,'')) || 0;
-  }
   async function masterSnapshot() {
     if (!authIdToken) throw new Error('Perbandingan memerlukan backend V5 dan login Google.');
-    const response = await fetch(endpoint.trim(), {
+    const url = await verifyV5Endpoint(endpoint);
+    const response = await fetch(url, {
       method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action:'getDashboardV4', authIdToken })
     });
@@ -119,44 +133,27 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
         !Array.isArray(payload.data) || !Array.isArray(payload.components)) {
       throw new Error('Backend V5 terautentikasi belum tersedia. Tidak ada data yang dikirim.');
     }
-    return payload;
+    return { rows: payload.data as Record<string, unknown>[], url };
   }
   async function compareMaster() {
     setChecking(true); setError(''); setComparisonReady(false); setComparison({}); setSelectedUpdates({});
     try {
-      const live = Boolean(authIdToken);
-      if (!live && !localMaster.length) throw new Error('Pilih file CSV Master terlebih dahulu atau masuk ke backend V5.');
+      if (!localMasterName && !authIdToken) throw new Error('Pilih file CSV Master atau masuk ke backend V5.');
+      const live = !localMasterName;
       const payload = live ? await masterSnapshot() : null;
-      const sourceRows = live ? payload!.data as Record<string, unknown>[] : localMaster;
-      const master = new Map<string, Record<string, unknown>>(
-        sourceRows.map((r) => [String(r['Kunci SPD'] || '').toLowerCase().trim(), r])
-      );
-      const counts = new Map<string, number>();
-      if (live) (payload!.components as Record<string, unknown>[]).forEach((r) => {
-        const key = String(r['Kunci SPD'] || '').toLowerCase().trim();
-        counts.set(key, (counts.get(key) || 0) + 1);
-      });
-      const savedAccounts: Record<string,string> = {}, found: Record<string,Comparison> = {};
+      const master = indexMaster(payload?.rows ?? localMaster);
+      const savedAccounts: Record<string,string> = {}, found: Record<string,MasterComparison> = {};
       uniqueRecords.forEach((item) => {
-        const old = master.get(item.key);
-        if (!old) { found[item.key] = { state:'baru', oldHash:'', note:'SPD belum tersimpan' }; return; }
-        const account = String(old['Kode Akun'] || '');
+        const matches = master.get(item.key) ?? [];
+        const account = matches.length === 1 ? String(matches[0]['Kode Akun'] || '') : '';
         if (findBudgetAccount(account)) savedAccounts[item.key] = account;
-        const oldHash = String(old['Raw Hash'] || '').trim();
-        const entry = entries.find((e) => (e.idKegiatan + '|' + e.nomorSPD).toLowerCase() === item.key);
-        if (oldHash && entry?.sourceHash) {
-          found[item.key] = { state: oldHash === entry.sourceHash ? 'sama' : 'berubah',
-            oldHash, note: oldHash === entry.sourceHash ? 'Hash tidak berubah' : 'Hash sumber berubah' };
-        } else if (Math.abs(parseMoney(old['Total Pengeluaran Riil']) - item.official) >= 1) {
-          found[item.key] = { state:'berubah', oldHash, note:'Nilai total berbeda. Periksa sebelum memperbarui.' };
-        } else if (live && (counts.get(item.key) || 0) !== (item.parsed?.components.length || 0)) {
-          found[item.key] = { state:'berubah', oldHash, note:'Jumlah komponen berbeda. Periksa rincian.' };
-        } else {
-          found[item.key] = { state:'perlu-review', oldHash, note:'Nilai sama, tetapi rincian belum dapat dipastikan karena tidak ada hash pembanding.' };
-        }
+        found[item.key] = compareWithMaster(matches, item.official, item.entry.sourceHash || '',
+          item.issues.every((issue) => issue === 'Pilih akun anggaran') &&
+          ['TERBACA', 'TIDAK_ADA_DATA'].includes(item.entry.presensiStatus || ''));
       });
       setComparison(found); setAccounts((current) => ({ ...savedAccounts, ...current }));
       setReviewed(false); setComparisonReady(true); setComparisonMode(live ? 'live' : 'file');
+      setComparisonEndpoint(payload?.url ?? '');
       const sizes = { baru:0, berubah:0, sama:0, 'perlu-review':0 };
       Object.values(found).forEach((c) => sizes[c.state]++);
       setResult('Hasil: '+sizes.baru+' baru, '+sizes.berubah+' berubah, '+sizes.sama+
@@ -172,21 +169,19 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
     setSaving(true); setResult('Membaca daftar SPD yang sudah ada di Master...'); setError('');
     const nextFeedback: Feedback = {};
     try {
-      const url = endpoint.trim();
+      const url = appsScriptEndpoint(endpoint);
+      if (comparisonEndpoint !== url) throw new Error('Endpoint berubah. Bandingkan kembali sebelum menyimpan.');
       const dashboard = await masterSnapshot();
-      const master = new Map<string, Record<string, unknown>>(
-        (dashboard.data as Record<string, unknown>[]).map((r) => [
-          String(r['Kunci SPD'] || '').toLowerCase().trim(), r
-        ])
-      );
+      const master = indexMaster(dashboard.rows);
       let success = 0, skipped = 0, failed = 0;
       for (const item of uniqueRecords) {
         const p = item.parsed;
         const state = comparison[item.key];
-        if (!p || item.issues.length || !item.akun || !state) {
+        if (!p || item.official === null || item.issues.length || !item.akun || !state) {
           nextFeedback[item.key] = 'Dilewati: data tidak lengkap'; skipped++; continue;
         }
-        const current = master.get(item.key);
+        const matches = master.get(item.key) ?? [];
+        const current = matches[0];
         if (state.state === 'sama' || state.state === 'perlu-review') {
           nextFeedback[item.key] = 'Dilewati: tidak ada perubahan terkonfirmasi'; skipped++; continue;
         }
@@ -194,14 +189,15 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
           nextFeedback[item.key] = 'Dilewati: SPD sudah ditambahkan pihak lain'; skipped++; continue;
         }
         if (state.state === 'berubah') {
-          if (!selectedUpdates[item.key] || !current || !state.oldHash ||
+          if (!selectedUpdates[item.key] || matches.length !== 1 || !state.oldHash ||
+              !['TERBACA', 'TIDAK_ADA_DATA'].includes(item.entry.presensiStatus || '') ||
               String(current['Raw Hash'] || '').trim() !== state.oldHash) {
             nextFeedback[item.key] = 'Dilewati: pembaruan tidak disetujui atau snapshot berubah';
             skipped++; continue;
           }
         }
-        const dest = p.tujuan || inferDestinationFromGeotags(p.geotags, p.tanggalKegiatan);
-        const geo = selectRequiredGeotagPoints(p.geotags, p.tanggalKegiatan, dest);
+        const dest = p.tujuan;
+        const geo = item.geo;
         const pts = geo?.points || {};
         const location = (point: {hariTanggal:string;waktuTagging:string;wilayahTagging:string} | undefined) =>
           point ? [point.hariTanggal,point.waktuTagging,point.wilayahTagging].join(' ') : '';
@@ -214,12 +210,13 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
           tanggalKegiatan: p.tanggalKegiatan, durasiHari: p.durasiHari, menginap: p.menginap,
           uangMuka: p.uangMuka, totalPengeluaranRiil: item.official,
           kodeAkun: item.akun.kode, namaAkun: item.akun.nama,
-          statusPJ: current ? String(current['Status Pertanggungjawaban'] || '') : 'Belum Lengkap', statusGeotag: geo?.status || 'Belum Dinilai',
+          statusPJ: current ? String(current['Status Pertanggungjawaban'] || '') : 'Belum Lengkap',
+          statusGeotag: geo?.status || (item.entry.presensiStatus === 'TIDAK_ADA_DATA' ? 'Tidak Lengkap' : 'Perlu Verifikasi'),
           start: location(pts.start), clockIn: location(pts.clockIn),
           clockOut: location(pts.clockOut), end: location(pts.end),
           detailGeotag: p.geotags.map((g) => [g.hariTanggal,g.waktuTagging,g.wilayahTagging,g.lokasiTagging].join(' ')).join(' | '),
           tanggalInput: today(), sumberData: 'Pilot Kolektor V2', waktuRekamSumber: new Date().toISOString(),
-          rawHash: entries.find((e) => e.idKegiatan === p.idKegiatan && e.nomorSPD === p.nomorSPD)?.sourceHash || '',
+          rawHash: item.entry.sourceHash || '',
           schemaVersion: 4, routes: p.routes, components: p.components, geotags: p.geotags,
           tahap: 'Pertanggungjawaban', nka: p.nomorSPD, namaPegawai: p.peserta,
           lamaHari: p.durasiHari, nilaiRiil: item.official,
@@ -227,7 +224,7 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
         try {
           const res = await fetch(url, {
             method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action:'upsertPerjadinV4', row, authIdToken })
+            body: JSON.stringify({ action:'upsertPilotV5', row, authIdToken, expectedPreviousHash: current ? state.oldHash : null })
           });
           const payload = await readApiResponse(res);
           if (!payload.success) throw new Error(String(payload.message || 'Simpan ditolak'));
@@ -252,7 +249,8 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
   const importable = uniqueRecords.filter((r) => !r.issues.length).length;
   const activityEntries = indexEntries.filter((e) => (e.jenisIndeks || 'kegiatan') === 'kegiatan');
   const participantEntries = indexEntries.filter((e) => e.jenisIndeks === 'pelaksana-spd');
-  const statusOf = (e: PilotIndex) => e.statusSumber || e.rawText?.match(/Laporan Tersedia|Belum ada laporan/i)?.[0] || 'Status belum tersedia';
+  const reportStatus = (entry: PilotIndex) => entry.statusLaporan ||
+    [entry.statusSumber, entry.rawText].join(' ').match(/Laporan Tersedia|Belum ada laporan/i)?.[0] || 'Belum terbaca';
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -261,25 +259,27 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
         <button type="button" onClick={onClose} className="rounded-md border px-3 py-2 text-sm">Tutup impor</button>
       </div>
       <label className="mt-5 block text-sm font-semibold">Pilih JSON dari ekstensi Chrome V2
-        <input type="file" accept=".json,application/json" onChange={(e) => void loadFile(e.target.files?.[0])} className="mt-2 block w-full rounded-md border p-2 font-normal" />
+        <input type="file" accept=".json,application/json" disabled={checking || saving} onChange={(e) => void loadFile(e.target.files?.[0])} className="mt-2 block w-full rounded-md border p-2 font-normal" />
       </label>
       {!!indexEntries.length && <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
         <p className="font-semibold">Indeks: {activityEntries.length} kegiatan dan {participantEntries.length} pelaksana SPD.</p>
-        <p className="mt-1 text-xs text-slate-600">Status laporan dari daftar kegiatan: {activityEntries.filter((e) => /laporan tersedia/i.test(statusOf(e))).length} tersedia, {activityEntries.filter((e) => /belum ada laporan/i.test(statusOf(e))).length} belum ada laporan. Status Draft SPD hanya muncul pada daftar pelaksana.</p>
+        <p className="mt-1 text-xs text-slate-600">Laporan: {activityEntries.filter((e) => /^laporan tersedia$/i.test(reportStatus(e))).length} tersedia, {activityEntries.filter((e) => /^belum ada laporan$/i.test(reportStatus(e))).length} belum ada.</p>
         <p className="mt-1 text-xs text-slate-500">Indeks tidak dihitung sebagai transaksi keuangan. Klik impor detail hanya untuk SPD yang benar-benar mempunyai rincian.</p>
         <div className="mt-2 max-h-40 overflow-y-auto text-xs">
           {indexEntries.slice(0, 30).map((e, i) => <div key={e.sourceKey || i} className="border-b py-1">
-            {e.nomorSPD || e.nomorST || e.idKegiatan || 'Tanpa identitas'} · {statusOf(e)}
+            {e.nomorSPD || e.nomorST || e.idKegiatan || 'Tanpa identitas'} {e.namaPegawai || ''} · {e.jenisIndeks === 'pelaksana-spd'
+              ? 'Status SPD: ' + (e.statusSPD || e.statusSumber || 'Belum terbaca')
+              : 'Kegiatan: ' + (e.statusKegiatan || 'Belum terbaca') + ' · Laporan: ' + reportStatus(e)}
           </div>)}
         </div>
       </div>}
       {!!entries.length && <>
         <p className="mt-4 text-sm font-semibold">{uniqueRecords.length} SPD unik, {importable} siap secara keuangan, {uniqueRecords.length-importable} memerlukan perbaikan nilai atau identitas</p>
         <label className="mt-3 block text-xs font-semibold">Bandingkan secara lokal menggunakan ekspor CSV tab EPERJADIN_V4
-          <input type="file" accept=".csv,text/csv" onChange={(e) => void loadLocalMaster(e.target.files?.[0])} className="mt-1 block w-full rounded-md border p-2 font-normal" />
+          <input type="file" accept=".csv,text/csv" disabled={checking || saving} onChange={(e) => void loadLocalMaster(e.target.files?.[0])} className="mt-1 block w-full rounded-md border p-2 font-normal" />
         </label>
         {!!localMasterName && <p className="mt-1 text-xs text-slate-500">File lokal: {localMasterName} ({localMaster.length} baris). Tidak dikirim ke server.</p>}
-        <button type="button" onClick={() => void compareMaster()} disabled={checking || (!authIdToken && !localMaster.length)} className="mt-3 rounded-md border border-blue-700 px-3 py-2 text-sm text-blue-700 disabled:opacity-50">{checking ? 'Memeriksa Master...' : 'Bandingkan dengan Master'}</button>
+        <button type="button" onClick={() => void compareMaster()} disabled={checking || saving || (!authIdToken && !localMasterName)} className="mt-3 rounded-md border border-blue-700 px-3 py-2 text-sm text-blue-700 disabled:opacity-50">{checking ? 'Memeriksa Master...' : 'Bandingkan dengan Master'}</button>
         <div className="mt-3 max-h-[480px] space-y-3 overflow-y-auto">
           {uniqueRecords.map((item) => <article key={item.key} className="rounded-lg border p-3 text-sm">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -289,7 +289,7 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
             <p className="mt-1 text-slate-600">{item.parsed?.namaKegiatan || 'Kegiatan belum terbaca'}</p>
             {comparison[item.key] && <p className="mt-1 text-xs font-semibold text-blue-700">Master: {comparison[item.key].state.toUpperCase()} · {comparison[item.key].note}</p>}
             {comparison[item.key]?.state === 'berubah' && <label className="mt-2 flex items-start gap-2 text-xs"><input type="checkbox" checked={Boolean(selectedUpdates[item.key])} onChange={(e) => {setSelectedUpdates((prev)=>({...prev,[item.key]:e.target.checked}));setReviewed(false);}} />Saya menyetujui pembaruan SPD ini setelah meneliti perubahannya.</label>}
-            <p className="mt-1">Total resmi: {formatMoney(item.official)}. Komponen dihitung: {formatMoney(item.sent)}. {item.parsed?.components.length || 0} jenis biaya.</p>
+            <p className="mt-1">Total resmi: {item.official === null ? 'Belum terbaca' : formatMoney(item.official)}. Komponen dihitung: {formatMoney(item.sent)}. {item.parsed?.components.length || 0} jenis biaya.</p>
             <label className="mt-2 block text-xs font-medium">Akun anggaran
               <select className="mt-1 w-full rounded-md border p-2 font-normal" value={item.parsed?.kodeAkun || accounts[item.key] || ''} onChange={(e) => {setAccounts((s)=>({...s,[item.key]:e.target.value}));setReviewed(false);}}>
                 <option value="">Pilih akun sesuai penugasan</option>

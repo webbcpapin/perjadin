@@ -235,11 +235,13 @@ function selectPangkalpinangDifferentPlace(
   return mode === 'after' ? candidates[0] : candidates.at(-1);
 }
 
-function issue(key: GeotagPointKey, expectedDate: string, expectedLocation: string, kind: 'missing' | 'mismatch'): GeotagRuleIssue {
+function issue(key: GeotagPointKey, expectedDate: string, expectedLocation: string, kind: 'missing' | 'mismatch' | 'order'): GeotagRuleIssue {
   const message =
     kind === 'mismatch'
       ? `${labels[key]} ada pada tanggal yang dipersyaratkan, tetapi lokasi tidak sesuai.`
-      : `${labels[key]} tidak ditemukan pada tanggal/lokasi yang dipersyaratkan.`;
+      : kind === 'order'
+        ? `${labels[key]} berada di luar urutan waktu perjalanan atau memakai titik yang sama.`
+        : `${labels[key]} tidak ditemukan pada tanggal/lokasi yang dipersyaratkan.`;
 
   return {
     key,
@@ -272,6 +274,7 @@ export function selectRequiredGeotagPoints(
   tanggalKegiatan: string,
   tujuan: string,
 ): GeotagRuleResult {
+  geotags = geotags.filter((entry) => /^(?:[01]?\d|2[0-3])[:.][0-5]\d$/.test(entry.waktuTagging));
   const { startDate, endDate } = parseActivityDateRange(tanggalKegiatan);
   const tujuanResolved = canonicalFromText(tujuan) || inferDestinationFromGeotags(geotags, tanggalKegiatan);
   const isPangkalpinangDestination = canonicalFromText(tujuanResolved) === 'Kota Pangkalpinang';
@@ -294,7 +297,20 @@ export function selectRequiredGeotagPoints(
   if (!points.clockOut) issues.push(issue('clockOut', endDate, tujuanResolved, issueKindForDate(geotags, endDate)));
   if (!points.end) issues.push(issue('end', endDate, 'Pangkalpinang', issueKindForDate(geotags, endDate)));
 
-  const hasMismatch = issues.some((item) => item.message.includes('lokasi tidak sesuai'));
+  const ordered: GeotagPointKey[] = ['start', 'clockIn', 'clockOut', 'end'];
+  let last: GeotagEntry | undefined;
+  let hasOrderIssue = false;
+  for (const key of ordered) {
+    const point = points[key];
+    if (!point) continue;
+    if (last && (geotagDate(point) < geotagDate(last) ||
+        (geotagDate(point) === geotagDate(last) && timeToMinutes(point.waktuTagging) <= timeToMinutes(last.waktuTagging)))) {
+      hasOrderIssue = true;
+      issues.push(issue(key, geotagDate(point), key === 'end' ? 'Pangkalpinang' : tujuanResolved, 'order'));
+      delete points[key];
+    } else last = point;
+  }
+  const hasMismatch = hasOrderIssue || issues.some((item) => item.message.includes('lokasi tidak sesuai'));
 
   return {
     points,
