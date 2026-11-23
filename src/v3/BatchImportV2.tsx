@@ -14,7 +14,7 @@ function today() {
   return new Date().toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-');
 }
 
-export default function BatchImportV2({ endpoint, onClose }: { endpoint: string; onClose: () => void }) {
+export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: { endpoint: string; authIdToken?: string; onClose: () => void }) {
   const [entries, setEntries] = useState<PilotEntry[]>([]);
   const [accounts, setAccounts] = useState<Record<string, string>>({});
   const [feedback, setFeedback] = useState<Feedback>({});
@@ -71,7 +71,9 @@ export default function BatchImportV2({ endpoint, onClose }: { endpoint: string;
     const nextFeedback: Feedback = {};
     try {
       const url = endpoint.trim();
-      const response = await fetch(url + (url.includes('?') ? '&' : '?') + 'action=getDashboardV4', { method: 'GET' });
+      const response = authIdToken
+        ? await fetch(url, { method: 'POST', headers: { 'Content-Type':'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'getDashboardV4', authIdToken }) })
+        : await fetch(url + (url.includes('?') ? '&' : '?') + 'action=getDashboardV4', { method: 'GET' });
       const dashboard = await readApiResponse(response);
       if (!dashboard.success || !Array.isArray(dashboard.data)) throw new Error('Gagal memverifikasi SPD yang sudah tersimpan. Tidak ada data yang dikirim.');
       const existing = new Set(dashboard.data.map((item) => {
@@ -115,7 +117,7 @@ export default function BatchImportV2({ endpoint, onClose }: { endpoint: string;
         try {
           const res = await fetch(url, {
             method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action:'upsertPerjadinV4', row })
+            body: JSON.stringify({ action:'upsertPerjadinV4', row, authIdToken })
           });
           const payload = await readApiResponse(res);
           if (!payload.success) throw new Error(String(payload.message || 'Simpan ditolak'));
