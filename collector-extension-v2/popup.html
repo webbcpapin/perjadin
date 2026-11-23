@@ -2,13 +2,16 @@
 <html lang="id">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kolektor ePerjadin V2</title><link rel="stylesheet" href="popup.css"></head>
 <body><main>
-<header><h1>ePerjadin Collector V2</h1><p>Pilot pengambilan data dari sesi browser resmi</p></header>
-<section class="notice">Buka halaman <b>daftar Pelaksana SPD</b> di SATU Kemenkeu dan pastikan sudah login. Pilot hanya membuka detail dan tab presensi, tidak menyetujui atau mengubah transaksi.</section>
+<header><h1>ePerjadin Collector V2</h1><p>Koleksi lokal, pembanding perubahan, tanpa token AI</p></header>
+<section class="notice">Untuk batch, buka <b>daftar Pelaksana SPD</b>. Untuk satu SPD, buka detailnya. Kolektor membaca kedua tab Rute dan Presensi. Semua data tetap lokal hingga Anda ekspor.</section>
 <label for="limit">Batas detail untuk satu proses</label><select id="limit"><option value="5">5 SPD (uji awal)</option><option value="10">10 SPD</option><option value="20">20 SPD (maksimal pilot)</option></select>
-<div class="actions"><button id="start" class="primary">Ambil detail otomatis</button><button id="stop">Hentikan</button></div>
-<button id="single">Rekam detail yang terbuka saja</button>
+<div class="actions"><button id="start" class="primary">Ambil SPD baru</button><button id="stop">Hentikan</button></div>
+<button id="refresh-existing">Periksa ulang SPD lama</button>
+<button id="single">Rekam detail yang terbuka</button>
+<button id="index-page">Indeks halaman yang tampil</button>
+<button id="index-all">Indeks seluruh halaman (termasuk Draft)</button>
 <section class="status" aria-live="polite"><strong id="status-title">Belum ada data</strong><span id="status-detail">Gunakan pilot 5 SPD lebih dulu.</span></section>
-<div class="actions"><button id="export" disabled>Unduh JSON</button><button id="copy" disabled>Salin JSON</button></div>
+<div class="actions"><button id="export" disabled>Unduh JSON</button><button id="copy" disabled>Salin JSON</button><button id="csv" disabled>Ringkasan CSV</button></div>
 <p class="small">Data hanya disimpan di penyimpanan lokal ekstensi dan baru dipindahkan saat Anda ekspor. Jangan kirim JSON ke pihak lain karena memuat data pegawai.</p>
 <button id="clear" class="danger">Hapus data lokal</button>
 </main><script src="popup.js"></script></body></html>

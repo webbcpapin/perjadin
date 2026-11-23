@@ -1,195 +1,347 @@
-/* Kolektor V2: hanya interaksi navigasi baca. Tidak mengirim data ke luar browser. */
+/* ePerjadin Collector V2.1: local/read-only capture, no hidden API, no writes to source. */
 (() => {
-  if (window.__eperjadinCollectorV2) return;
-  window.__eperjadinCollectorV2 = true;
+  if (window.__eperjadinCollectorV21) return;
+  window.__eperjadinCollectorV21 = true;
+
   const STORAGE = 'eperjadinV2Pilot';
-  const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const text = (el) => clean(el?.textContent);
+  const clean = (s) => String(s ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+  const textOf = (el) => clean(el?.innerText || el?.textContent || '');
+  const dateRe = /^\d{2}-\d{2}-\d{4}$/;
+  const timeRe = /^\d{1,2}[:.]\d{2}$/;
+  const forbidden = /(setujui|tolak|hapus|batalkan|bayar|kirim|proses|approve|delete|reject)/i;
   let running = false;
   let stopRequested = false;
-  const isPerjadin = () => /perjadin/i.test(location.pathname + document.title + document.body.innerText.slice(0, 600));
 
-  function table() {
-    return [...document.querySelectorAll('table')].find((t) => t.querySelector('tbody tr')) || null;
+  function isPerjadin() {
+    return location.hostname === 'satu.kemenkeu.go.id'
+      && (/perjadin/i.test(location.pathname) || /perjadin nasional/i.test(document.body.innerText.slice(0, 800)));
   }
-  function signature() {
-    const t = table();
-    return t ? [...t.querySelectorAll('tbody tr')].slice(0, 2).map(text).join('|').slice(0, 1500) : '';
+
+  function getListTable() {
+    return [...document.querySelectorAll('table')].find((t) => {
+      const headers = textOf(t.querySelector('thead')).toLowerCase();
+      return t.querySelector('tbody tr') && (/(kegiatan|pelaksana|spd|nomor st)/.test(headers) || /id kegiatan/i.test(t.innerText.slice(0, 600)));
+    }) || null;
   }
-  function rows() {
-    return [...(table()?.querySelectorAll('tbody tr') || [])].filter((r) => text(r));
+  function listRows() {
+    return [...(getListTable()?.querySelectorAll('tbody tr') || [])].filter((r) => textOf(r));
+  }
+  function listSignature() {
+    return listRows().slice(0, 3).map(textOf).join('|').slice(0, 2400);
   }
   function listKey(row) {
-    const id = text(row).match(/Id\s*Kegiatan\s*:\s*([a-z0-9-]+)/i)?.[1] || '';
-    const st = text(row).match(/ST-\d+\/[A-Z0-9.]+\/\d+/i)?.[0] || '';
-    return (id + '|' + st + '|' + text(row)).toLowerCase().slice(0, 2000);
+    const raw = textOf(row);
+    const id = raw.match(/Id\s*Kegiatan\s*:\s*([a-z0-9-]+)/i)?.[1] || '';
+    const spd = raw.match(/SPD-\d+\/\d+-\d+/i)?.[0] || '';
+    const st = raw.match(/ST-\d+\/[A-Z0-9.]+\/\d+/i)?.[0] || '';
+    return [id, spd, st, raw.slice(0, 250)].join('|').toLowerCase();
   }
   function detailControl(row) {
-    const elements = [...row.querySelectorAll('a,button,[role="button"]')];
-    return elements.find((el) => {
-      const name = clean([text(el), el.getAttribute('aria-label'), el.getAttribute('title')].join(' '));
+    const controls = [...row.querySelectorAll('a,button,[role="button"]')];
+    return controls.find((el) => {
+      const label = clean([textOf(el), el.getAttribute('aria-label'), el.getAttribute('title')].filter(Boolean).join(' '));
       const href = el.getAttribute('href') || '';
-      const label = /^(detail|lihat detail|lihat|rincian|detail pertanggungjawaban|detail perjalanan)$/i.test(name)
-        || /(?:detail|rincian|lihat)/i.test(name);
-      const approvedUrl = el.tagName === 'A' && /\/((?:detail|rincian)[^/]*)(?:\/|$|\?)/i.test(href);
-      const prohibited = /(setujui|tolak|hapus|batalkan|bayar|kirim|proses|approve|delete|reject)/i.test(name);
-      return !prohibited && (approvedUrl || label);
+      return !forbidden.test(label)
+        && (/^(detail|lihat detail|lihat|rincian|detail pertanggungjawaban|detail perjalanan)$/i.test(label)
+          || /\/(?:detail|rincian)(?:\/|$|\?)/i.test(href));
     }) || null;
   }
-  function byVisibleLabel(label) {
-    const elements = [...document.querySelectorAll('button,a,[role="tab"],[role="button"]')];
-    return elements.find((el) => {
-      const labelText = clean([text(el), el.getAttribute('aria-label'), el.getAttribute('title')].join(' '));
-      return label.test(labelText) && !el.disabled;
-    }) || null;
+  function selectTab(regex) {
+    const candidates = [...document.querySelectorAll('button,a,[role="tab"],[role="button"],span,li,div')];
+    const matches = candidates.filter((el) => {
+      if (el.getClientRects().length === 0) return false;
+      if (!regex.test(textOf(el))) return false;
+      return ![...el.children].some((child) => regex.test(textOf(child)));
+    });
+    return matches.find((e) => e.matches('button,a,[role="tab"]'))
+      || matches.find((e) => e.matches('span,li')) || matches[0] || null;
   }
-  async function until(predicate, label, timeoutMs = 12000) {
+  async function waitUntil(predicate, label, timeout = 12000) {
     const started = Date.now();
-    while (Date.now() - started < timeoutMs) {
-      const result = predicate();
-      if (result) return result;
-      await sleep(280);
+    while (Date.now() - started < timeout) {
+      if (predicate()) return true;
+      await sleep(250);
     }
-    throw new Error('Batas waktu: ' + label + '. Jika halaman reload penuh, jalankan kembali untuk melanjutkan.');
+    throw new Error('Halaman tidak selesai dimuat: ' + label + '. Coba lanjutkan dari progres terakhir.');
   }
   function isDetail() {
-    return /detail\s+(pertanggungjawaban|perjalanan dinas|pelaksanaan)/i.test(document.body.innerText || '')
-      && /(Nomor SPD|No SPD|Nama Kegiatan)/i.test(document.body.innerText || '');
+    const body = document.body.innerText || '';
+    return /Detail Pertanggungjawaban/i.test(body) && /(?:Nomor SPD|No SPD)/i.test(body);
   }
-  function normalizeText(raw) {
-    return String(raw || '').replace(/\u00a0/g, ' ').replace(/\r/g, '');
+  function scopedDetailText() {
+    const body = String(document.body.innerText || '').replace(/\r/g, '');
+    const start = body.search(/(?:^|\n)\s*Nama Kegiatan\s*(?:\n|$)/i);
+    return start >= 0 ? body.slice(start) : body;
   }
-  function getDetail() {
-    if (!isDetail()) throw new Error('Halaman Detail Pertanggungjawaban belum terbuka.');
-    const financial = normalizeText(document.body.innerText);
-    const meta = {
-      idKegiatan: financial.match(/Id Kegiatan\s*\n\s*([a-z0-9]{12,})/i)?.[1] || '',
-      nomorSPD: financial.match(/SPD-\d+\/\d+-\d+/i)?.[0] || '',
-      namaPegawai: financial.match(/Pelaksana SPD\s*\n\s*([^\n]+)/i)?.[1]?.trim() || '',
-    };
-    return { financial, meta };
-  }
-  async function readPresences(financial) {
-    const tab = byVisibleLabel(/^presensi perjalanan dinas$/i);
-    if (!tab) return { text: '', warning: 'Tab Presensi tidak tersedia pada detail.' };
+  async function switchTab(regex, needed, label) {
+    const tab = selectTab(regex);
+    if (!tab) return false;
     tab.click();
-    try {
-      await until(() => /Log Data Presensi|GEOTAGGING|LOKASI GEO TAGGING/i.test(document.body.innerText), 'tab Presensi', 9000);
-      await sleep(320);
-      const presence = normalizeText(document.body.innerText);
-      return { text: presence, warning: '' };
-    } catch (_) {
-      return { text: '', warning: 'Presensi belum selesai dimuat.' };
-    }
+    await waitUntil(() => needed.test(document.body.innerText || ''), label, 9000);
+    await sleep(250);
+    return true;
   }
-  async function readDetailRecord(sourceKey = '') {
-    const { financial, meta } = getDetail();
-    const presence = await readPresences(financial);
+
+  function captureGeotagTable() {
+    const table = [...document.querySelectorAll('table')].find((t) => {
+      const hd = textOf(t.querySelector('thead') || t).toLowerCase();
+      return /waktu tagging/i.test(hd) && /(geo tagging|lokasi geo)/i.test(hd);
+    });
+    if (!table) return { markdown: '', entries: [], warning: 'Tabel presensi tidak teridentifikasi pada DOM.' };
+    let currentDate = '';
+    const entries = [];
+    const rows = [...table.querySelectorAll('tbody tr')];
+    for (const row of rows) {
+      const cells = [...row.querySelectorAll(':scope > td')];
+      if (cells.length < 4) continue;
+      const first = textOf(cells[0]);
+      if (dateRe.test(first)) currentDate = first;
+      const time = textOf(cells[1]).replace('.', ':');
+      if (!timeRe.test(time) || !currentDate) continue;
+      const wilayah = textOf(cells[2]);
+      const lokasi = textOf(cells[3]).replace(/Lihat Di Map/gi, '').trim();
+      if (!wilayah) continue;
+      entries.push({ hariTanggal: currentDate, waktuTagging: time, wilayahTagging: wilayah, lokasiTagging: lokasi });
+    }
+    const markdown = [
+      'Log Data Presensi',
+      '| HARI, TANGGAL | WAKTU TAGGING | WILAYAH | LOKASI GEO TAGGING |',
+      '| --- | --- | --- | --- |',
+      ...entries.map((e) => '| ' + [e.hariTanggal, e.waktuTagging, e.wilayahTagging, e.lokasiTagging].map((v) => v.replace(/[|\n\r]/g, ' ')).join(' | ') + ' |'),
+    ].join('\n');
+    return { markdown, entries, warning: entries.length ? '' : 'Tabel presensi ada tetapi baris tagging tidak terbaca.' };
+  }
+
+  function normalizeFinancial(body) {
+    const text = String(body || '').replace(/\r/g, '');
+    // Ignore clock/nav outside the detail area to make comparisons stable.
+    const start = text.search(/(?:^|\n)\s*Nama Kegiatan\s*(?:\n|$)/i);
+    const scoped = start >= 0 ? text.slice(start) : text;
+    return scoped.replace(/\n[ \t]*\n{2,}/g, '\n\n').trim();
+  }
+  async function hashText(raw) {
+    const bytes = new TextEncoder().encode(raw.replace(/\s+/g, ' ').trim());
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return [...new Uint8Array(digest)].map((v) => v.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function captureDetail(sourceKey = '') {
+    if (!isPerjadin() || !isDetail()) throw new Error('Buka Detail Pertanggungjawaban SPD terlebih dahulu.');
+    const initialPresensi = !!selectTab(/^Presensi Perjalanan Dinas$/i)
+      && /Log Data Presensi/i.test(document.body.innerText || '');
+    const warnings = [];
+    // Route screen contains all cost components and route information. Capture it first,
+    // even when the user opened the record on the Presensi tab.
+    const routeFound = await switchTab(/^Rute Perjalanan Dinas$/i,
+      /(Rute\s+1|Uang Harian|Biaya Tiket Pesawat|Uang Penginapan)/i, 'Rute Perjalanan Dinas')
+      .catch((error) => { warnings.push(error.message); return false; });
+    if (!routeFound) warnings.push('Tab Rute belum bisa dibaca; komponen harus diverifikasi manual.');
+    const financial = normalizeFinancial(scopedDetailText());
+
+    let presence = { markdown: '', entries: [], warning: '' };
+    const switched = await switchTab(/^Presensi Perjalanan Dinas$/i,
+      /(Log Data Presensi|GEOTAGGING|WAKTU TAGGING)/i, 'Presensi Perjalanan Dinas')
+      .catch((error) => { warnings.push(error.message); return false; });
+    if (switched) {
+      presence = captureGeotagTable();
+      if (presence.warning) warnings.push(presence.warning);
+    } else warnings.push('Tab Presensi belum dapat dibaca.');
+
+    // Keep the user's selected tab if possible.
+    if (!initialPresensi) {
+      try { await switchTab(/^Rute Perjalanan Dinas$/i, /(Rute\s+1|Uang Harian|Biaya Tiket)/i, 'Rute Perjalanan Dinas'); }
+      catch (_) { /* read-only best effort */ }
+    }
+
+    const rawText = financial + (presence.markdown ? '\n\n' + presence.markdown : '');
+    const idKegiatan = rawText.match(/Id Kegiatan\s*\n\s*([a-z0-9]{12,})/i)?.[1] || '';
+    const nomorSPD = rawText.match(/SPD-\d+\/\d+-\d+/i)?.[0] || '';
+    const namaPegawai = rawText.match(/Pelaksana SPD\s*\n\s*([^\n]+)/i)?.[1]?.trim() || '';
+    if (!idKegiatan || !nomorSPD) {
+      warnings.push('ID Kegiatan atau Nomor SPD belum terbaca; hasil belum siap impor.');
+    }
     return {
-      sourceKey: sourceKey || (meta.idKegiatan + '|' + meta.nomorSPD).toLowerCase(),
-      idKegiatan: meta.idKegiatan, nomorSPD: meta.nomorSPD,
-      namaPegawai: meta.namaPegawai,
-      rawText: financial + (presence.text ? '\n\n' + presence.text : ''),
-      warnings: presence.warning ? [presence.warning] : [],
-      sourceUrl: location.href, capturedAt: new Date().toISOString(),
+      sourceKey: sourceKey || (idKegiatan + '|' + nomorSPD).toLowerCase(),
+      idKegiatan, nomorSPD, namaPegawai,
+      rawText, presenceRows: presence.entries.length,
+      sourceHash: await hashText(rawText),
+      warnings, sourceUrl: location.href,
+      capturedAt: new Date().toISOString(),
     };
+  }
+
+  function blankState() { return { records: [], index: [], errors: [], progress: {}, stats: { new: 0, changed: 0, unchanged: 0 } }; }
+  async function readState() { return (await chrome.storage.local.get(STORAGE))[STORAGE] || blankState(); }
+  async function writeState(state) { await chrome.storage.local.set({ [STORAGE]: state }); return state; }
+  async function progress(values) {
+    const state = await readState();
+    state.progress = { ...state.progress, ...values, updatedAt: new Date().toISOString() };
+    await writeState(state);
+  }
+  async function indexCurrentPage() {
+    const items = listRows().map((row) => {
+      const raw = textOf(row);
+      return {
+        sourceKey: listKey(row),
+        idKegiatan: raw.match(/Id\s*Kegiatan\s*:\s*([a-z0-9-]+)/i)?.[1] || '',
+        nomorST: raw.match(/ST-\d+\/[A-Z0-9.]+\/\d+/i)?.[0] || '',
+        nomorSPD: raw.match(/SPD-\d+\/\d+-\d+/i)?.[0] || '',
+        statusSumber: raw.match(/\b(Draft|Disetujui PPK|Disetujui|Dikirim|Ditolak|Selesai)\b/i)?.[0] || '',
+        rawText: raw, sourceUrl: location.href, capturedAt: new Date().toISOString(),
+      };
+    });
+    const state = await readState();
+    const stable = (item) => item.idKegiatan && item.nomorSPD
+      ? (item.idKegiatan + '|' + item.nomorSPD).toLowerCase()
+      : item.sourceKey;
+    const byKey = new Map((state.index || []).map((r) => [stable(r), r]));
+    for (const item of items) byKey.set(stable(item), item);
+    state.index = [...byKey.values()];
+    state.progress = { ...state.progress, indexed: state.index.length, updatedAt: new Date().toISOString() };
+    await writeState(state);
+    return { ok: true, indexed: items.length, totalIndexed: state.index.length };
+  }
+
+  async function indexAllPages(maxPages = 100) {
+    if (running) return { ok: false, reason: 'Proses lain masih berjalan.' };
+    if (!getListTable()) return { ok: false, reason: 'Buka daftar SPD terlebih dahulu.' };
+    running = true; stopRequested = false;
+    let pages = 0, lastResult = { totalIndexed: 0 };
+    try {
+      const first = document.querySelector('button[aria-label="First page"]:not(:disabled)');
+      if (first) {
+        const prior = listSignature();
+        first.click();
+        await waitUntil(() => listSignature() && listSignature() !== prior, 'halaman pertama');
+      }
+      for (; pages < maxPages && !stopRequested; pages++) {
+        lastResult = await indexCurrentPage();
+        await progress({ state:'indexing', pagesIndexed: pages + 1, indexed: lastResult.totalIndexed });
+        const next = document.querySelector('button[aria-label="Next page"]:not(:disabled)')
+          || [...document.querySelectorAll('button')].find((el) =>
+            /^(Berikutnya|Next page)$/i.test(textOf(el)) && !el.disabled);
+        if (!next) break;
+        const before = listSignature();
+        next.click();
+        await waitUntil(() => listSignature() && listSignature() !== before, 'halaman daftar berikutnya');
+        await sleep(200);
+      }
+      await progress({ state: stopRequested ? 'paused' : 'completed',
+        pagesIndexed: pages + 1, indexed: lastResult.totalIndexed,
+        message: stopRequested ? 'Pengindeksan dihentikan' : 'Pengindeksan selesai' });
+      return { ok:true, pagesIndexed: pages + 1, indexed:lastResult.totalIndexed };
+    } catch (e) {
+      const reason = e.message || String(e);
+      await progress({ state:'paused', pagesIndexed: pages + 1, error: reason });
+      return { ok:false, pagesIndexed:pages + 1, reason };
+    } finally { running = false; }
+  }
+
+  async function storeDetail(record, extra = {}) {
+    const state = await readState();
+    const key = [record.idKegiatan, record.nomorSPD].filter(Boolean).join('|').toLowerCase();
+    const i = state.records.findIndex((r) => [r.idKegiatan, r.nomorSPD].join('|').toLowerCase() === key);
+    const previous = i >= 0 ? state.records[i] : null;
+    const changeType = !previous ? 'new' : previous.sourceHash === record.sourceHash ? 'unchanged' : 'changed';
+    const merged = {
+      ...(previous || {}), ...record, changeType,
+      previousHash: previous?.sourceHash && changeType === 'changed' ? previous.sourceHash : (previous?.previousHash || ''),
+    };
+    if (i >= 0) state.records[i] = merged;
+    else state.records.push(merged);
+    state.stats ||= { new: 0, changed: 0, unchanged: 0 };
+    state.stats[changeType] = (state.stats[changeType] || 0) + 1;
+    state.progress = { ...state.progress, ...extra, updatedAt: new Date().toISOString() };
+    await writeState(state);
+    return { ok: true, changeType, total: state.records.length, warnings: record.warnings };
+  }
+  async function errorLog(sourceKey, message) {
+    const state = await readState();
+    state.errors ||= [];
+    state.errors.push({ sourceKey: sourceKey.slice(0, 150), message, at: new Date().toISOString() });
+    state.errors = state.errors.slice(-100);
+    await writeState(state);
   }
   async function backToList() {
-    const button = byVisibleLabel(/^(kembali|kembali ke daftar|back)$/i);
-    if (button) button.click();
-    else if (history.length > 1) history.back();
-    else throw new Error('Tombol Kembali tidak ditemukan.');
-    await until(() => rows().length > 0 && !isDetail(), 'kembali ke daftar');
-    await sleep(350);
+    const buttons = [...document.querySelectorAll('button,a,[role="button"],span')];
+    const back = buttons.find((el) => {
+      const name = clean([textOf(el), el.getAttribute('aria-label'), el.getAttribute('title')].join(' '));
+      return /^(Kembali|Back)$/i.test(name) && el.getClientRects().length;
+    });
+    if (!back) throw new Error('Kontrol Kembali tidak ditemukan. Buka daftar, lalu pilih Lanjutkan.');
+    back.click();
+    await waitUntil(() => !isDetail() && listRows().length, 'Daftar Pelaksana SPD');
+    await sleep(300);
   }
-  async function storeRecord(record, options = {}) {
-    const data = (await chrome.storage.local.get(STORAGE))[STORAGE] || { records: [], errors: [], progress: {} };
-    const key = [record.idKegiatan, record.nomorSPD].filter(Boolean).join('|').toLowerCase() || record.sourceKey;
-    const existing = data.records.findIndex((r) => (r.idKegiatan + '|' + r.nomorSPD).toLowerCase() === key);
-    if (existing >= 0) data.records[existing] = { ...data.records[existing], ...record };
-    else data.records.push(record);
-    data.progress = { ...data.progress, ...options, updatedAt: new Date().toISOString() };
-    await chrome.storage.local.set({ [STORAGE]: data });
-    return data;
-  }
-  async function storeProgress(next) {
-    const data = (await chrome.storage.local.get(STORAGE))[STORAGE] || { records: [], errors: [], progress: {} };
-    data.progress = { ...data.progress, ...next, updatedAt: new Date().toISOString() };
-    await chrome.storage.local.set({ [STORAGE]: data });
-    return data;
-  }
-  async function pilot({ limit = 20, maxPages = 5 } = {}) {
-    if (running) throw new Error('Pilot sedang berjalan.');
-    if (!isPerjadin() || !table()) throw new Error('Buka daftar SPD di SATU Kemenkeu terlebih dahulu.');
+  async function pilot(options = {}) {
+    if (running) return { ok: false, reason: 'Kolektor masih berjalan.' };
+    if (!isPerjadin() || !getListTable()) return { ok: false, reason: 'Buka daftar Pelaksana SPD terlebih dahulu.' };
     running = true; stopRequested = false;
-    limit = Math.max(1, Math.min(20, Number(limit) || 20));
-    maxPages = Math.max(1, Math.min(10, Number(maxPages) || 5));
-    let completed = 0, skipped = 0, page = 0, stoppedReason = '';
-    await storeProgress({ state: 'running', limit, completed: 0, skipped: 0, page: 1, error: '' });
+    const limit = Math.max(1, Math.min(20, Number(options.limit) || 5));
+    const refreshExisting = options.refreshExisting === true;
+    const maxPages = Math.max(1, Math.min(10, Number(options.maxPages) || 5));
+    let count = 0, skipped = 0, page = 0;
+    await progress({ state: 'running', completed: 0, skipped: 0, limit, page: 1, message: '' });
     try {
-      for (page = 0; page < maxPages && completed < limit; page++) {
-        const queue = rows().map((r) => listKey(r));
-        for (const key of queue) {
-          if (stopRequested || completed >= limit) break;
-          const saved = (await chrome.storage.local.get(STORAGE))[STORAGE] || { records: [], errors: [] };
-          if ((saved.records || []).some((r) => r.sourceKey === key)) { skipped++; continue; }
-          const row = rows().find((r) => listKey(r) === key);
-          if (!row) { skipped++; continue; }
-          const ctrl = detailControl(row);
-          if (!ctrl) {
-            saved.errors ||= [];
-            saved.errors.push({ sourceKey: key.slice(0, 140), message: 'Kontrol detail tidak teridentifikasi. Butuh selector resmi.', at: new Date().toISOString() });
-            await chrome.storage.local.set({ [STORAGE]: saved });
+      for (page = 0; page < maxPages && count < limit; page++) {
+        await indexCurrentPage();
+        const queue = listRows().map((row) => listKey(row));
+        for (const sourceKey of queue) {
+          if (stopRequested || count >= limit) break;
+          const state = await readState();
+          if (!refreshExisting && state.records.some((r) => r.sourceKey === sourceKey)) { skipped++; continue; }
+          const row = listRows().find((r) => listKey(r) === sourceKey);
+          const button = row && detailControl(row);
+          if (!button) {
             skipped++;
+            await errorLog(sourceKey, 'Tombol Detail tidak ditemukan; tidak mencoba tombol transaksi lainnya.');
             continue;
           }
-          const targetName = text(row).slice(0, 160);
-          ctrl.click();
-          await until(isDetail, 'detail SPD ' + targetName);
-          await sleep(360);
-          const record = await readDetailRecord(key);
-          if (!record.nomorSPD || !record.idKegiatan) {
-            throw new Error('ID Kegiatan atau Nomor SPD tidak terbaca. Pilot berhenti tanpa menyimpan record tidak lengkap.');
-          }
-          await storeRecord(record, { state: 'running', page: page + 1, completed: completed + 1, skipped });
-          completed++;
+          button.click();
+          await waitUntil(isDetail, 'Detail Pertanggungjawaban');
+          const record = await captureDetail(sourceKey);
+          await storeDetail(record, { state: 'running', page: page + 1, completed: count + 1, skipped, lastSourceKey: sourceKey });
+          count++;
           await backToList();
         }
-        if (stopRequested || completed >= limit) break;
+        if (stopRequested || count >= limit) break;
         const next = document.querySelector('button[aria-label="Next page"]:not(:disabled)')
-          || byVisibleLabel(/^(next page|halaman berikutnya|berikutnya)$/i);
-        if (!next || next.disabled) break;
-        const before = signature();
+          || [...document.querySelectorAll('button')].find((el) =>
+            /^(Berikutnya|Next page)$/i.test(textOf(el)) && !el.disabled);
+        if (!next) break;
+        const before = listSignature();
         next.click();
-        await until(() => signature() && signature() !== before, 'halaman daftar berikutnya');
-        await sleep(250);
+        await waitUntil(() => listSignature() && listSignature() !== before, 'Halaman daftar berikutnya');
+        await sleep(300);
       }
-      stoppedReason = stopRequested ? 'Dihentikan pengguna' : 'Selesai';
-      await storeProgress({ state: stopRequested ? 'paused' : 'completed', completed, skipped, page: page + 1, message: stoppedReason });
-      return { ok: true, completed, skipped, reason: stoppedReason };
+      await progress({ state: stopRequested ? 'paused' : 'completed', completed: count, skipped,
+        page: page + 1, message: stopRequested ? 'Dihentikan oleh pengguna' : 'Pengumpulan selesai' });
+      return { ok: true, completed: count, skipped };
     } catch (error) {
-      stoppedReason = error.message || String(error);
-      await storeProgress({ state: 'paused', completed, skipped, page: page + 1, error: stoppedReason });
-      return { ok: false, completed, skipped, reason: stoppedReason };
+      const message = error.message || String(error);
+      await progress({ state: 'paused', completed: count, skipped, page: page + 1, error: message });
+      await errorLog('pilot', message);
+      return { ok: false, completed: count, skipped, reason: message };
     } finally {
       running = false;
     }
   }
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (!message || !['RUN_PILOT_V2','STOP_PILOT_V2','CAPTURE_DETAIL_V2'].includes(message.type)) return false;
+
+  chrome.runtime.onMessage.addListener((message, _sender, respond) => {
+    if (!message || !['RUN_PILOT_V2', 'STOP_PILOT_V2', 'CAPTURE_DETAIL_V2', 'CAPTURE_INDEX_V2', 'CAPTURE_INDEX_ALL_V2'].includes(message.type)) return false;
     if (message.type === 'STOP_PILOT_V2') {
       stopRequested = true;
-      sendResponse({ ok: true, message: 'Permintaan berhenti diterima.' });
+      respond({ ok: true, message: 'Perintah berhenti diterima.' });
       return false;
     }
-    if (message.type === 'CAPTURE_DETAIL_V2') {
-      readDetailRecord().then((record) => storeRecord(record)).then(() => sendResponse({ ok: true }))
-        .catch((e) => sendResponse({ ok: false, reason: e.message || String(e) }));
-      return true;
-    }
-    pilot({ limit: message.limit, maxPages: message.maxPages }).then(sendResponse)
-      .catch((e) => sendResponse({ ok: false, reason: e.message || String(e) }));
+    const job = message.type === 'RUN_PILOT_V2' ? pilot(message)
+      : message.type === 'CAPTURE_DETAIL_V2'
+        ? captureDetail().then(storeDetail)
+        : message.type === 'CAPTURE_INDEX_ALL_V2'
+          ? indexAllPages()
+          : indexCurrentPage();
+    Promise.resolve(job).then(respond).catch((error) => respond({ ok: false, reason: error.message || String(error) }));
     return true;
   });
 })();
