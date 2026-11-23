@@ -6,7 +6,8 @@ import { readApiResponse } from './apiClient';
 
 type PilotEntry = { rawText: string; sourceKey?: string; idKegiatan?: string; nomorSPD?: string; sourceUrl?: string; sourceHash?: string; changeType?: string; warnings?: string[] };
 type Comparison = { state: 'baru' | 'sama' | 'berubah' | 'perlu-review'; oldHash: string; note: string };
-type PilotFile = { schemaVersion: number; source: string; collector: string; records: PilotEntry[] };
+type PilotIndex = { sourceKey: string; idKegiatan?: string; nomorST?: string; nomorSPD?: string; statusSumber?: string; rawText?: string };
+type PilotFile = { schemaVersion: number; source: string; collector: string; records: PilotEntry[]; index?: PilotIndex[] };
 type Feedback = Record<string, string>;
 const formatMoney = (value: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(value || 0);
 const accepted = /^(Dikirim|Disetujui|Dibayar|Selesai)$/i;
@@ -17,6 +18,7 @@ function today() {
 
 export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: { endpoint: string; authIdToken?: string; onClose: () => void }) {
   const [entries, setEntries] = useState<PilotEntry[]>([]);
+  const [indexEntries, setIndexEntries] = useState<PilotIndex[]>([]);
   const [accounts, setAccounts] = useState<Record<string, string>>({});
   const [feedback, setFeedback] = useState<Feedback>({});
   const [error, setError] = useState('');
@@ -53,20 +55,21 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
   }, [records]);
 
   async function loadFile(file?: File) {
-    setEntries([]); setFeedback({}); setError(''); setResult(''); setReviewed(false); setAccounts({}); setComparison({}); setComparisonReady(false); setSelectedUpdates({});
+    setEntries([]); setIndexEntries([]); setFeedback({}); setError(''); setResult(''); setReviewed(false); setAccounts({}); setComparison({}); setComparisonReady(false); setSelectedUpdates({});
     if (!file) return;
-    if (file.size > 4 * 1024 * 1024) return setError('Berkas maksimal 4 MB. Ambil per batch 5–20 SPD.');
+    if (file.size > 25 * 1024 * 1024) return setError('Berkas maksimal 25 MB. Simpan hasil kolektor dalam beberapa file jika lebih besar.');
     try {
       const data = JSON.parse(await file.text()) as PilotFile;
       if (data.source !== 'satu-kemenkeu' || data.schemaVersion !== 2 || data.collector !== 'pilot-v2' || !Array.isArray(data.records)) {
         throw new Error('Gunakan file JSON dari Kolektor ePerjadin V2.');
       }
-      if (!data.records.length) throw new Error('JSON tidak berisi detail SPD.');
-      if (data.records.length > 20) throw new Error('Berkas memuat lebih dari 20 SPD. Ekspor batch pilot maksimal 20 SPD.');
+      if (!data.records.length && !data.index?.length) throw new Error('JSON tidak berisi detail atau indeks SPD.');
+      if (data.records.length > 1000) throw new Error('Berkas berisi lebih dari 1.000 SPD, pecah menjadi beberapa batch.');
       if (data.records.some((r) => typeof r.rawText !== 'string' || r.rawText.length > 120000)) {
         throw new Error('Format detail tidak valid atau terlalu besar.');
       }
       setEntries(data.records);
+      setIndexEntries((data.index || []).slice(0, 5000));
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }
 
@@ -223,12 +226,21 @@ export default function BatchImportV2({ endpoint, authIdToken = '', onClose }: {
     <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div><h2 className="text-lg font-semibold">Impor Batch Kolektor V2</h2>
-          <p className="mt-1 text-sm text-slate-500">Pilot 5–20 SPD. Tinjau nilai dan akun sebelum menyimpan. SPD lama tidak ditimpa tanpa konfirmasi.</p></div>
+          <p className="mt-1 text-sm text-slate-500">Koleksi 5–20 SPD per proses, lalu impor file gabungan. Tinjau komponen, akun dan perubahan sebelum menyimpan.</p></div>
         <button type="button" onClick={onClose} className="rounded-md border px-3 py-2 text-sm">Tutup impor</button>
       </div>
       <label className="mt-5 block text-sm font-semibold">Pilih JSON dari ekstensi Chrome V2
         <input type="file" accept=".json,application/json" onChange={(e) => void loadFile(e.target.files?.[0])} className="mt-2 block w-full rounded-md border p-2 font-normal" />
       </label>
+      {!!indexEntries.length && <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+        <p className="font-semibold">Indeks daftar Satu Kemenkeu: {indexEntries.length} baris, termasuk {indexEntries.filter((e) => /draft/i.test(e.statusSumber || '')).length} status Draft yang terlihat.</p>
+        <p className="mt-1 text-xs text-slate-500">Indeks tidak dihitung sebagai transaksi keuangan. Klik impor detail hanya untuk SPD yang benar-benar mempunyai rincian.</p>
+        <div className="mt-2 max-h-40 overflow-y-auto text-xs">
+          {indexEntries.slice(0, 30).map((e, i) => <div key={e.sourceKey || i} className="border-b py-1">
+            {e.nomorSPD || e.nomorST || e.idKegiatan || 'Tanpa identitas'} · {e.statusSumber || 'Status belum dibaca'}
+          </div>)}
+        </div>
+      </div>}
       {!!entries.length && <>
         <p className="mt-4 text-sm font-semibold">{uniqueRecords.length} SPD unik, {importable} memenuhi validasi, {uniqueRecords.length-importable} perlu diperiksa</p>
         <button type="button" onClick={() => void compareMaster()} disabled={checking || !authIdToken} className="mt-3 rounded-md border border-blue-700 px-3 py-2 text-sm text-blue-700 disabled:opacity-50">{checking ? 'Memeriksa Master...' : 'Bandingkan dengan Master'}</button>
