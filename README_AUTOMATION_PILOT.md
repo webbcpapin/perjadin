@@ -19,10 +19,10 @@ Mengurangi kegiatan copy-paste manual dari SATU Kemenkeu tanpa mengubah proses p
 3. Login ke SATU Kemenkeu secara normal. Buka **List Pelaksana SPD** dalam modul Perjadin.
 4. Klik ikon **Kolektor ePerjadin V2.1**. Pilih **5 SPD** lalu **Ambil SPD baru**.
    - Jika sekarang berada di halaman detail pada tab Presensi, pilih **Rekam detail yang terbuka**. Kolektor akan mencoba membaca tab Rute dan Presensi tanpa perlu copy-paste.
-   - Untuk menyimpan daftar termasuk status Draft, klik **Indeks daftar yang tampil** pada halaman daftar.
+   - Untuk menyimpan daftar termasuk status Draft, klik **Indeks seluruh halaman** pada halaman daftar. Fitur ini berpindah dari halaman pertama ke akhir sesuai pagination yang terbaca. **Indeks halaman yang tampil** hanya membaca satu halaman.
    - Untuk memeriksa ulang perubahan data yang pernah direkam, klik **Periksa ulang SPD lama**.
 5. Biarkan tab SATU Kemenkeu terbuka. Setelah proses selesai, buka kembali popup untuk melihat jumlah berhasil dan error. Ekstensi menyimpan progres setiap SPD di Chrome storage, sehingga proses berikutnya dapat melewati SPD yang sudah direkam. Jika situs memuat ulang halaman penuh, proses mungkin berhenti dan perlu dilanjutkan manual dari daftar.
-6. Klik **Unduh JSON** atau **Ringkasan CSV**; jangan unggah berkas tersebut ke GitHub atau tempat publik. Hanya file JSON berisi rincian yang dapat diimpor ke ePerjadin Workspace.
+6. Klik **Unduh JSON** atau **Ringkasan CSV**; jangan unggah berkas tersebut ke GitHub atau tempat publik. Hanya JSON berisi rincian yang dapat diimpor sebagai transaksi. JSON gabungan dapat memuat lebih dari 20 SPD karena batas 20 berlaku untuk satu proses kolektor, bukan seluruh hasil penyimpanan lokal.
 7. Buka https://webbcpapin.github.io/perjadin/ > **Impor Batch Pilot V2**, unggah JSON dan periksa komponen serta akun untuk setiap SPD.
 8. Untuk **pratinjau tanpa menyimpan**, langkah 1–7 sudah cukup. Untuk membandingkan dengan Master dan menyimpan batch, administrator harus mengaktifkan backend V5 dan login Google terlebih dahulu. Klik **Bandingkan dengan Master** untuk memisahkan SPD baru, sama, berubah, atau perlu verifikasi.
 9. Setelah login V5 berhasil, periksa akun dan nilai setiap SPD. Pembaruan SPD lama hanya dilakukan jika statusnya **BERUBAH** dan Anda memilih checkbox konfirmasi pada SPD tersebut. Untuk SPD **perlu-review** tanpa hash pembanding, sistem melewati pembaruan otomatis.
