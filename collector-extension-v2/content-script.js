@@ -192,8 +192,11 @@
       };
     });
     const state = await readState();
-    const byKey = new Map((state.index || []).map((r) => [r.sourceKey, r]));
-    for (const item of items) byKey.set(item.sourceKey, item);
+    const stable = (item) => item.idKegiatan && item.nomorSPD
+      ? (item.idKegiatan + '|' + item.nomorSPD).toLowerCase()
+      : item.sourceKey;
+    const byKey = new Map((state.index || []).map((r) => [stable(r), r]));
+    for (const item of items) byKey.set(stable(item), item);
     state.index = [...byKey.values()];
     state.progress = { ...state.progress, indexed: state.index.length, updatedAt: new Date().toISOString() };
     await writeState(state);
@@ -206,6 +209,12 @@
     running = true; stopRequested = false;
     let pages = 0, lastResult = { totalIndexed: 0 };
     try {
+      const first = document.querySelector('button[aria-label="First page"]:not(:disabled)');
+      if (first) {
+        const prior = listSignature();
+        first.click();
+        await waitUntil(() => listSignature() && listSignature() !== prior, 'halaman pertama');
+      }
       for (; pages < maxPages && !stopRequested; pages++) {
         lastResult = await indexCurrentPage();
         await progress({ state:'indexing', pagesIndexed: pages + 1, indexed: lastResult.totalIndexed });
