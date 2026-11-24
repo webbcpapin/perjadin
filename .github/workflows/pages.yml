@@ -37,14 +37,21 @@ jobs:
       - name: Verify pilot collector JavaScript
         run: |
           node --check collector-extension-v2/content-script.js
+          node --check collector-extension-v2/background.js
           node --check collector-extension-v2/popup.js
           node -e "JSON.parse(require('fs').readFileSync('collector-extension-v2/manifest.json','utf8'))"
 
       - name: Unit tests
         run: npm test
 
+      - name: Lint intake code
+        run: npx eslint src/v3 src/main.tsx
+
       - name: Build
         run: npm run build
+
+      - name: Verify browser bundle privacy
+        run: node scripts/check-public-build.mjs
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
