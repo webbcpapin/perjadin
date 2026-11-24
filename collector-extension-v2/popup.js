@@ -1,6 +1,25 @@
 const STORAGE = 'eperjadinV2Pilot';
 const $ = (s) => document.querySelector(s);
 const title = $('#status-title'), detail = $('#status-detail');
+const BATCH_BYTES = 750000;
+function batchesOf(records) {
+  const batches = [];
+  let batch = [], bytes = 100;
+  const encoder = new TextEncoder();
+  for (const row of records) {
+    const record = { rawText: row.rawText };
+    const size = encoder.encode(JSON.stringify(record)).length + 1;
+    if (batch.length && (batch.length === 20 || bytes + size > BATCH_BYTES)) {
+      batches.push(batch);
+      batch = [];
+      bytes = 100;
+    }
+    batch.push(record);
+    bytes += size;
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
+}
 function render(state) {
   const records = state?.records || [], progress = state?.progress || {};
   const errors = state?.errors || [], index = state?.index || [], stats = state?.stats || {};
@@ -14,12 +33,17 @@ function render(state) {
     errors.length ? errors.length + ' catatan kendala' : '',
     (stats.new || 0) + ' baru', (stats.changed || 0) + ' berubah', (stats.unchanged || 0) + ' tetap'
   ].filter(Boolean).join(' · ');
-  $('#export').disabled = records.length === 0 && index.length === 0;
-  $('#copy').disabled = records.length === 0 && index.length === 0;
-  $('#csv').disabled = records.length === 0;
+  const batches = batchesOf(records);
+  const select = $('#batch');
+  const current = Number(select.value);
+  select.replaceChildren(...batches.map((batch, i) => new Option('Batch ' + (i + 1) + ' (' + batch.length + ' SPD)', i)));
+  select.value = String(Math.min(current, batches.length - 1));
+  select.disabled = !batches.length;
+  $('#export').disabled = !batches.length;
+  $('#clear').disabled = ['running', 'indexing'].includes(progress.state);
 }
 async function refresh() {
-  const d = await chrome.storage.local.get(STORAGE);
+  const d = await chrome.storage.session.get(STORAGE);
   render(d[STORAGE] || null);
 }
 async function activeTab() {
@@ -54,15 +78,6 @@ $('#stop').onclick = () => runCommand('STOP_PILOT_V2');
 $('#single').onclick = () => runCommand('CAPTURE_DETAIL_V2');
 $('#index-page').onclick = () => runCommand('CAPTURE_INDEX_V2');
 $('#index-all').onclick = () => runCommand('CAPTURE_INDEX_ALL_V2');
-async function payload() {
-  const state = (await chrome.storage.local.get(STORAGE))[STORAGE] || {};
-  return {
-    schemaVersion: 2, source: 'satu-kemenkeu', collector: 'pilot-v2',
-    exportedAt: new Date().toISOString(), records: state.records || [],
-    index: state.index || [], stats: state.stats || {}, errors: state.errors || [],
-    progress: state.progress || {}
-  };
-}
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob), link = document.createElement('a');
   link.href = url;
@@ -71,28 +86,23 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 3000);
 }
 $('#export').onclick = async () => {
-  const data = await payload();
-  downloadBlob(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }),
-    'eperjadin-v21-' + new Date().toISOString().slice(0, 10) + '.json');
-};
-$('#copy').onclick = async () => {
-  await navigator.clipboard.writeText(JSON.stringify(await payload()));
-  title.textContent = 'JSON disalin ke clipboard';
-};
-$('#csv').onclick = async () => {
-  const data = await payload();
-  const quote = (s) => '"' + String(s ?? '').replace(/"/g, '""') + '"';
-  const rows = [['ID Kegiatan', 'Nomor SPD', 'Nama Pegawai', 'Status Perubahan', 'Jumlah Presensi', 'Tgl Ekstraksi'],
-    ...data.records.map((r) => [r.idKegiatan, r.nomorSPD, r.namaPegawai, r.changeType, r.presenceRows, r.capturedAt])];
-  const csv = '\uFEFF' + rows.map((r) => r.map(quote).join(',')).join('\r\n');
-  downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'eperjadin-ringkasan-v21.csv');
+  const i = Number($('#batch').value);
+  const state = (await chrome.storage.session.get(STORAGE))[STORAGE] || {};
+  const records = batchesOf(state.records || [])[i];
+  if (!records) return;
+  const blob = new Blob([JSON.stringify({ schemaVersion: 2, records })], { type: 'application/json' });
+  if (blob.size > BATCH_BYTES) {
+    title.textContent = 'Batch melebihi 750 KB. Gunakan copy-paste SPD yang diperlukan.';
+    return;
+  }
+  downloadBlob(blob, 'eperjadin-' + new Date().toISOString().slice(0, 10) + '-batch-' + (i + 1) + '.json');
 };
 $('#clear').onclick = async () => {
   if (!confirm('Hapus seluruh data SPD dan progres kolektor lokal?')) return;
-  await chrome.storage.local.remove(STORAGE);
+  await chrome.storage.session.remove(STORAGE);
   await refresh();
 };
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes[STORAGE]) render(changes[STORAGE].newValue);
+  if (area === 'session' && changes[STORAGE]) render(changes[STORAGE].newValue);
 });
 refresh();

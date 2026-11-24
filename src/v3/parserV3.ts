@@ -1,7 +1,6 @@
-import { normalizeAccountCode } from '../data/perjadinAccounts';
 import type { CostComponentV4, GeotagEntryV3, ParsedPerjadinV3, RouteV3 } from './types';
 
-const ACCOUNT_RE = /636722\.015\.52411[13]\.01505(?:CC|WA)\.\d{4}[A-Z]{3}\.A000000001\.00000\.2\.3051\.2\.000000\.000000/i;
+const ACCOUNT_RE = /\b\d{6}\.\d{3}\.\d{6}(?:\.[A-Z0-9]+){3,15}\b/i;
 const DATE_NUMERIC_RE = /^\d{2}-\d{2}-\d{4}$/;
 const TIME_RE = /^\d{1,2}[:.]\d{2}$/;
 const COMPONENT_STATUS_RE = /^(Dikirim|Draft|Disetujui(?:\s+PPK)?|Ditolak(?:\s+PPK)?|Dibatalkan|Dibayar|Selesai|Menunggu(?:\s+Persetujuan)?(?:\s+PPK)?|Diajukan(?:\s+ke\s+PPK)?)$/i;
@@ -73,10 +72,10 @@ function valueByInlinePrefix(lines: string[], prefix: RegExp) {
 }
 
 function parseRupiah(value: string) {
-  const match = value.match(/Rp\s*([\d.,]+)/i);
-  if (!match) return 0;
-  const compact = match[1].replace(/\./g, '').replace(',', '.');
-  return Number(compact) || 0;
+  const match = value.match(/\bRp\s*((?:\d{1,3}(?:\.\d{3})+|\d+)(?:,\d{1,2})?)(?![\d.,])/i);
+  if (!match) return undefined;
+  const amount = Number(match[1].replace(/\./g, '').replace(',', '.'));
+  return Number.isFinite(amount) ? amount : undefined;
 }
 
 function currencyAfterLabel(lines: string[], label: RegExp, maxLookahead = 5) {
@@ -84,11 +83,11 @@ function currencyAfterLabel(lines: string[], label: RegExp, maxLookahead = 5) {
     if (!label.test(lines[i])) continue;
     for (let j = i; j < lines.length && j <= i + maxLookahead; j++) {
       const value = parseRupiah(lines[j]);
-      if (value || /Rp\s*0(?:[.,]0+)?/i.test(lines[j])) return value;
       if (j > i && isFieldLabel(lines[j]) && !label.test(lines[j])) break;
+      if (value !== undefined) return value;
     }
   }
-  return 0;
+  return undefined;
 }
 
 function numberAfterLabel(lines: string[], label: RegExp) {
@@ -99,8 +98,7 @@ function numberAfterLabel(lines: string[], label: RegExp) {
 }
 
 function extractAccountCode(text: string) {
-  const match = text.replace(/\s+/g, '').match(ACCOUNT_RE);
-  return match ? normalizeAccountCode(match[0]) : '';
+  return text.match(ACCOUNT_RE)?.[0].toUpperCase() || '';
 }
 
 function parseDateRangeLine(line: string) {
@@ -144,6 +142,7 @@ function parseRoutes(lines: string[]): RouteV3[] {
     let range: ReturnType<typeof parseDateRangeLine> = null;
     for (let j = i + 1; j < lines.length && j <= i + 7; j++) {
       const candidate = lines[j];
+      if (/^Rute\s+\d+$/i.test(candidate)) break;
       const parsedRange = parseDateRangeLine(candidate);
       if (!destination && !isFieldLabel(candidate) && !parsedRange) destination = candidate;
       if (parsedRange) {
@@ -152,6 +151,7 @@ function parseRoutes(lines: string[]): RouteV3[] {
       }
     }
     if (!range) continue;
+    const next = lines.findIndex((line, j) => j > i && (/^Rute\s+\d+$/i.test(line) || /^Ringkasan$/i.test(line)));
     routes.push({
       nomorRute: Number(routeMatch[1]) || routes.length + 1,
       tujuan: destination,
@@ -159,6 +159,7 @@ function parseRoutes(lines: string[]): RouteV3[] {
       tanggalSelesai: range.end,
       tanggalKegiatan: range.combined,
       durasiHari: range.duration,
+      menginap: parseMenginap(lines.slice(i, next < 0 ? undefined : next)),
     });
   }
   return routes;
@@ -167,13 +168,14 @@ function parseRoutes(lines: string[]): RouteV3[] {
 function parseMenginap(lines: string[]) {
   for (let i = 0; i < lines.length; i++) {
     if (!/^Menginap\?$/i.test(lines[i])) continue;
+    const options = [];
     for (let j = i + 1; j < lines.length && j <= i + 3; j++) {
       const candidate = cleanMarkdown(lines[j]);
-      if (/^Ya$/i.test(candidate)) return 'Ya';
-      if (/^Tidak$/i.test(candidate)) return 'Tidak';
+      if (/^(Ya|Tidak)$/i.test(candidate)) { options.push(candidate); continue; }
       if (/^Ya\s*Tidak$/i.test(candidate) || /^YaTidak$/i.test(candidate)) return 'Tidak Terbaca';
-      if (isFieldLabel(candidate)) break;
+      break;
     }
+    return options.length === 1 ? options[0] : 'Tidak Terbaca';
   }
   return 'Tidak Terbaca';
 }
@@ -192,7 +194,10 @@ function normalizeComponentStatus(value: string) {
 
 function parseComponents(lines: string[]): CostComponentV4[] {
   const components: CostComponentV4[] = [];
+  let nomorRute = 0;
   for (let i = 0; i < lines.length; i++) {
+    const route = lines[i].match(/^Rute\s+(\d+)$/i);
+    if (route) nomorRute = Number(route[1]);
     if (!COMPONENT_STATUS_RE.test(lines[i])) continue;
 
     const status = normalizeComponentStatus(lines[i]);
@@ -207,7 +212,7 @@ function parseComponents(lines: string[]): CostComponentV4[] {
     }
     if (!name) continue;
 
-    let nilaiRiil = 0;
+    let nilaiRiil: number | undefined;
     for (let j = i + 1; j < lines.length && j <= i + 6; j++) {
       if (/^Total Nilai Riil$/i.test(lines[j])) {
         for (let k = j + 1; k < lines.length && k <= j + 3; k++) {
@@ -221,9 +226,8 @@ function parseComponents(lines: string[]): CostComponentV4[] {
       if (COMPONENT_STATUS_RE.test(lines[j])) break;
     }
 
-    const key = `${name}|${status}|${nilaiRiil}`.toLowerCase();
-    if (components.some((item) => `${item.nama}|${item.status}|${item.nilaiRiil}`.toLowerCase() === key)) continue;
-    components.push({ nomorRute: 1, nama: name, status, nilaiRiil });
+    if (nilaiRiil === undefined || !nomorRute) continue;
+    components.push({ nomorRute, nama: name, status, nilaiRiil });
   }
   return components;
 }
@@ -313,22 +317,23 @@ function parseSequentialGeotags(lines: string[]) {
     // Satu Kemenkeu commonly copies date, time, and region on one line,
     // followed by the geotag address on the next line.
     const combined = line.match(/^(\d{2}-\d{2}-\d{4})\s+(\d{1,2}[:.]\d{2})\s+(.+)$/);
-    if (combined) {
-      const address = lines[i + 1] && !isFieldLabel(lines[i + 1]) ? lines[i + 1] : '';
+    const day = line.match(/^(\d{2}-\d{2}-\d{4})(?:\s+-.*)?$/);
+    if (day) { currentDate = day[1]; continue; }
+    if (combined) currentDate = combined[1];
+    const inline = combined ? [combined[0], combined[2], combined[3]] : line.match(/^(\d{1,2}[:.]\d{2})\s+(.+)$/);
+    if (inline && currentDate) {
+      const next = lines[i + 1];
+      const address = next && !isFieldLabel(next) && !/^(?:\d{2}-\d{2}-\d{4}|\d{1,2}[:.]\d{2}\b)/.test(next) ? next : '';
       entries.push({
-        hariTanggal: combined[1],
-        waktuTagging: combined[2].replace('.', ':'),
-        wilayahTagging: combined[3],
+        hariTanggal: currentDate,
+        waktuTagging: inline[1].replace('.', ':'),
+        wilayahTagging: inline[2],
         lokasiTagging: address,
       });
       if (address) i++;
       continue;
     }
 
-    if (DATE_NUMERIC_RE.test(line)) {
-      currentDate = line;
-      continue;
-    }
     if (!TIME_RE.test(line) || !currentDate) continue;
     const wilayah = lines[i + 1] && !isFieldLabel(lines[i + 1]) ? lines[i + 1] : '';
     const lokasi = lines[i + 2] && !isFieldLabel(lines[i + 2]) ? lines[i + 2] : '';
@@ -393,9 +398,6 @@ export function parseEPerjadinV3(text: string): ParsedPerjadinV3 | null {
   const durationFromLabel = numberAfterLabel(lines, /^Durasi Perjalanan$/i);
   const lampiran = valueAfterLabel(lines, /^Lampiran ST$/i);
   const menginap = parseMenginap(lines);
-  const totalDikirim = components
-    .filter((item) => /^(Dikirim|Disetujui|Dibayar|Selesai)$/i.test(item.status))
-    .reduce((sum, item) => sum + item.nilaiRiil, 0);
   const uangHarian = components.find((item) => /^Uang Harian\b/i.test(item.nama));
 
   return {
@@ -420,14 +422,17 @@ export function parseEPerjadinV3(text: string): ParsedPerjadinV3 | null {
     durasiHari: durationFromLabel || primaryRoute?.durasiHari || 1,
     menginap,
     statusUangHarian: uangHarian?.status || '',
-    uangMuka,
-    totalPengeluaranRiil: totalPengeluaranRiil || totalDikirim,
-    nilaiSBMAwal,
-    totalNilaiSBM,
-    totalNilaiRiil: totalPengeluaranRiil || totalDikirim,
+    uangMuka: uangMuka ?? 0,
+    uangMukaTerbaca: uangMuka !== undefined,
+    totalResmiTerbaca: totalPengeluaranRiil !== undefined,
+    presensiStatus: geotags.length ? 'ada' : /log data presensi|geotagging/i.test(text) && /tidak ada data|belum ada presensi|\d{2}-\d{2}-\d{4}[\t ]+-/i.test(text) ? 'kosong' : 'belum_terbaca',
+    totalPengeluaranRiil: totalPengeluaranRiil ?? 0,
+    nilaiSBMAwal: nilaiSBMAwal ?? 0,
+    totalNilaiSBM: totalNilaiSBM ?? 0,
+    totalNilaiRiil: totalPengeluaranRiil ?? 0,
     efisiensi,
     kodeAkun: extractAccountCode(text),
-    routes: routes.map((route) => ({ ...route, menginap })),
+    routes,
     components,
     geotags,
   };

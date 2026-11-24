@@ -3,7 +3,6 @@
   if (window.__eperjadinCollectorV21) return;
   window.__eperjadinCollectorV21 = true;
 
-  const STORAGE = 'eperjadinV2Pilot';
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const clean = (s) => String(s ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
   const textOf = (el) => clean(el?.innerText || el?.textContent || '');
@@ -122,7 +121,7 @@
     if (entries.length) return { markdown, entries, status: 'TERBACA', warning: '' };
     if (!rowsWithTimes) {
       // Not an extraction error. The source currently displays no geotag rows.
-      return { markdown, entries, status: 'TIDAK_ADA_DATA', warning: '' };
+      return { markdown: markdown + '\nTidak ada data presensi', entries, status: 'TIDAK_ADA_DATA', warning: '' };
     }
     return { markdown, entries, status: 'GAGAL_BACA',
       warning: 'Ada waktu tagging tetapi tanggal atau wilayah belum dapat diparsing.' };
@@ -187,8 +186,16 @@
   }
 
   function blankState() { return { records: [], index: [], errors: [], progress: {}, stats: { new: 0, changed: 0, unchanged: 0 } }; }
-  async function readState() { return (await chrome.storage.local.get(STORAGE))[STORAGE] || blankState(); }
-  async function writeState(state) { await chrome.storage.local.set({ [STORAGE]: state }); return state; }
+  async function readState() {
+    const result = await chrome.runtime.sendMessage({ type: 'GET_COLLECTOR_STATE' });
+    if (!result?.ok) throw new Error('Penyimpanan sesi tidak tersedia.');
+    return result.data || blankState();
+  }
+  async function writeState(state) {
+    const result = await chrome.runtime.sendMessage({ type: 'SET_COLLECTOR_STATE', state });
+    if (!result?.ok) throw new Error('Penyimpanan sesi penuh atau tidak tersedia. Ekspor lalu bersihkan data lokal.');
+    return state;
+  }
   async function progress(values) {
     const state = await readState();
     state.progress = { ...state.progress, ...values, updatedAt: new Date().toISOString() };

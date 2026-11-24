@@ -1,377 +1,215 @@
-import { useMemo, useState } from 'react';
-import { CheckCircle2, ClipboardPaste, Database, MapPin, RefreshCw, Save, ShieldAlert, WalletCards } from 'lucide-react';
-import '../index.css';
-import { budgetAccounts, findBudgetAccount } from '../data/perjadinAccounts';
-import { inferDestinationFromGeotags, selectRequiredGeotagPoints } from '../utils/geotagRules';
-import { parseEPerjadinV3 } from './parserV3';
-import DashboardV4 from './DashboardV4';
-import BatchImportV2 from './BatchImportV2';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Check, ClipboardPaste, FileJson, FileSearch, LockKeyhole, Send, Trash2 } from 'lucide-react';
 import GoogleLoginV5 from './GoogleLoginV5';
+import { endpoint, issues, MAX_BATCH, MAX_BYTES, MAX_TEXT, post, readCollector, review, validClientId } from './intake';
+import type { DraftRow, Receipt } from './intake';
 
-const DEFAULT_WEBAPP_URL =
-  'https://script.google.com/macros/s/AKfycbzPBI2tql2DyCLnNUJIThuAEKz3aRHZhmXDUcwxSY-lSOmFm9zzHarNpThW9PhTJbRY/exec';
-const WEBAPP_STORAGE_KEY = 'eperjadin_webapp_url_v5';
-const STATUS_PERTANGGUNGJAWABAN = [
-  'Belum Lengkap',
-  'Sudah Kirim',
-  'Proses Pencairan',
-  'Selesai Pencairan',
-  'Kekurangan Dokumen',
-] as const;
-type StatusPertanggungjawaban = (typeof STATUS_PERTANGGUNGJAWABAN)[number];
-
-function rupiah(value: number) {
-  return new Intl.NumberFormat('id-ID', {
-    style: 'currency',
-    currency: 'IDR',
-    maximumFractionDigits: 0,
-  }).format(value || 0);
-}
-
-function today() {
-  return new Date().toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-');
-}
-
-async function parseApiPayload(response: Response) {
-  const text = await response.text();
-  const trimmed = text.trim();
-  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
-    if (/<!doctype|<html/i.test(trimmed)) {
-      throw new Error('Apps Script mengembalikan halaman HTML. Deploy Web App dengan akses Anyone, lalu gunakan URL /exec terbaru.');
-    }
-    throw new Error(`Respons database bukan JSON. HTTP ${response.status}.`);
-  }
-  return JSON.parse(trimmed);
-}
+const inputStyle = 'mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-700';
+const button = 'inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-45';
+const primary = 'inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-teal-800 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-900 disabled:opacity-45';
+const rupiah = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+type Mode = 'paste' | 'json';
 
 export default function AppV3() {
+  const [mode, setMode] = useState<Mode>('paste');
   const [raw, setRaw] = useState('');
-  const [endpoint, setEndpoint] = useState(() => {
-    localStorage.setItem(WEBAPP_STORAGE_KEY, DEFAULT_WEBAPP_URL);
-    return DEFAULT_WEBAPP_URL;
-  });
-  const [kodeAkun, setKodeAkun] = useState('');
-  const [statusPJ, setStatusPJ] = useState<StatusPertanggungjawaban>('Belum Lengkap');
-  const [message, setMessage] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'checking' | 'ok' | 'error'>('idle');
-  const [connectionMessage, setConnectionMessage] = useState('');
-  const [view, setView] = useState<'parser' | 'dashboard'>('dashboard');
-  const [showBatch, setShowBatch] = useState(false);
-  const [googleClientId, setGoogleClientId] = useState(() => localStorage.getItem('eperjadin_oauth_client_id') || '');
-  const [googleIdToken, setGoogleIdToken] = useState('');
-  function changeClientId(value: string) { localStorage.setItem('eperjadin_oauth_client_id', value); setGoogleClientId(value); }
+  const [draft, setDraft] = useState<DraftRow[]>([]);
+  const [url, setUrl] = useState('');
+  const [clientId, setClientId] = useState('');
+  const [login, setLogin] = useState(false);
+  const [token, setToken] = useState('');
+  const [verified, setVerified] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [receipt, setReceipt] = useState<Receipt>();
+  const operation = useRef(0);
+  const chosenFile = useRef<HTMLInputElement>(null);
+  const setGoogleToken = useCallback((credential: string) => {
+    setToken(credential);
+    setVerified(false);
+    setError('');
+  }, []);
+  const resetInput = useCallback(() => {
+    setRaw('');
+    setDraft([]);
+    if (chosenFile.current) chosenFile.current.value = '';
+  }, []);
+  const signOut = useCallback(() => {
+    setToken('');
+    setVerified(false);
+    setLogin(false);
+  }, []);
+  useEffect(() => {
+    // Do not leave sensitive form data in a browser back/forward snapshot.
+    const leave = () => {
+      operation.current++;
+      resetInput();
+      signOut();
+      setBusy(false);
+      setReceipt(undefined);
+      setError('');
+    };
+    window.addEventListener('pagehide', leave);
+    const restore = (event: PageTransitionEvent) => { if (event.persisted) leave(); };
+    window.addEventListener('pageshow', restore);
+    return () => { window.removeEventListener('pagehide', leave); window.removeEventListener('pageshow', restore); };
+  }, [resetInput, signOut]);
 
-  const parsed = useMemo(() => parseEPerjadinV3(raw), [raw]);
-  const detectedDestination = useMemo(() => {
-    if (!parsed) return '';
-    return parsed.tujuan || inferDestinationFromGeotags(parsed.geotags, parsed.tanggalKegiatan);
-  }, [parsed]);
-
-  const geotag = useMemo(() => {
-    if (!parsed) return null;
-    return selectRequiredGeotagPoints(parsed.geotags, parsed.tanggalKegiatan, detectedDestination);
-  }, [parsed, detectedDestination]);
-
-  const effectiveAccount = parsed?.kodeAkun || kodeAkun;
-  const account = effectiveAccount ? findBudgetAccount(effectiveAccount) : undefined;
-  const totalKomponenDikirim = useMemo(() => {
-    if (!parsed) return 0;
-    return parsed.components
-      .filter((item) => /^(Dikirim|Disetujui|Dibayar|Selesai)$/i.test(item.status))
-      .reduce((sum, item) => sum + item.nilaiRiil, 0);
-  }, [parsed]);
-  const sourceTotal = parsed?.totalPengeluaranRiil || totalKomponenDikirim || 0;
-  const componentDelta = sourceTotal - totalKomponenDikirim;
-  const uangHarian = parsed?.components.find((item) => /^Uang Harian\b/i.test(item.nama))?.nilaiRiil || 0;
-  const ready = Boolean(parsed?.idKegiatan && parsed?.nomorST && parsed?.peserta && parsed?.nomorSPD && sourceTotal > 0 && parsed.components.length > 0 && Math.abs(componentDelta) < 1 && account);
-
-  async function validateConnection() {
-    const url = endpoint.trim();
-    if (!url) {
-      setConnectionStatus('error');
-      setConnectionMessage('URL Apps Script belum tersedia.');
+  function switchMode(next: Mode) {
+    if (next === mode || busy) return;
+    resetInput();
+    setError('');
+    setReceipt(undefined);
+    setMode(next);
+  }
+  async function openFile(file?: File) {
+    setDraft([]);
+    setReceipt(undefined);
+    setError('');
+    if (!file) return;
+    if (!/\.json$/i.test(file.name) || (file.type && file.type !== 'application/json') || file.size > MAX_BYTES || !file.size) {
+      setError('Pilih file JSON Collector hingga 750 KB.');
       return;
     }
-    setConnectionStatus('checking');
-    setConnectionMessage('Memeriksa koneksi database...');
+    const op = ++operation.current;
+    setBusy(true);
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'getDashboardV4', authIdToken: googleIdToken }),
-      });
-      const payload = await parseApiPayload(response);
-      if (!payload.success) throw new Error(payload.message || 'Koneksi database tidak berhasil.');
-      localStorage.setItem(WEBAPP_STORAGE_KEY, url);
-      setConnectionStatus('ok');
-      setConnectionMessage(`Koneksi ePerjadin V${payload.version || 4} aktif.`);
-    } catch (error) {
-      setConnectionStatus('error');
-      setConnectionMessage(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  function updateEndpoint(value: string) {
-    setEndpoint(value);
-    setConnectionStatus('idle');
-    setConnectionMessage('');
-    setMessage('');
-  }
-
-  async function save() {
-    if (!parsed) return setMessage('Data belum terbaca. Paste Detail Pertanggungjawaban ePerjadin terlebih dahulu.');
-    if (!account) return setMessage('Akun belum teridentifikasi. Pilih akun yang benar sebelum menyimpan.');
-    if (!parsed.nomorSPD) return setMessage('Nomor SPD belum terbaca. Data tidak disimpan.');
-    if (!sourceTotal) return setMessage('Total Pengeluaran Riil belum terbaca. Data tidak disimpan.');
-    if (!parsed.components.length) return setMessage('Komponen biaya belum terbaca. Perbaiki data parsing sebelum menyimpan.');
-    if (Math.abs(componentDelta) >= 1) return setMessage('Total komponen belum sesuai dengan Total Pengeluaran Riil. Data tidak disimpan.');
-
-    const points = geotag?.points || {};
-    const detailGeotag = parsed.geotags
-      .map((item) => `${item.hariTanggal} ${item.waktuTagging} ${item.wilayahTagging} ${item.lokasiTagging}`.trim())
-      .join(' | ');
-    const kunciSPD = `${parsed.idKegiatan}|${parsed.nomorSPD}`.toLowerCase();
-
-    const row = {
-      kunciSPD,
-      idKegiatan: parsed.idKegiatan,
-      namaKegiatan: parsed.namaKegiatan,
-      nomorST: parsed.nomorST,
-      lampiranST: parsed.lampiranST,
-      nomorKegiatan: parsed.nomorKegiatan,
-      dipaInisiator: parsed.dipaInisiator,
-      ppk: parsed.ppk,
-      peserta: parsed.peserta,
-      nip: parsed.nip,
-      nomorSPD: parsed.nomorSPD,
-      nomorPerjalanan: parsed.nomorPerjalanan,
-      jumlahRute: parsed.jumlahRute,
-      tujuan: detectedDestination,
-      tanggalMulai: parsed.tanggalMulai,
-      tanggalSelesai: parsed.tanggalSelesai,
-      tanggalKegiatan: parsed.tanggalKegiatan,
-      durasiHari: parsed.durasiHari,
-      menginap: parsed.menginap,
-      uangMuka: parsed.uangMuka,
-      totalPengeluaranRiil: sourceTotal,
-      kodeAkun: account.kode,
-      namaAkun: account.nama,
-      statusPJ,
-      statusGeotag: geotag?.status || 'Belum Dinilai',
-      start: points.start ? `${points.start.hariTanggal} ${points.start.waktuTagging} ${points.start.wilayahTagging}` : '',
-      clockIn: points.clockIn ? `${points.clockIn.hariTanggal} ${points.clockIn.waktuTagging} ${points.clockIn.wilayahTagging}` : '',
-      clockOut: points.clockOut ? `${points.clockOut.hariTanggal} ${points.clockOut.waktuTagging} ${points.clockOut.wilayahTagging}` : '',
-      end: points.end ? `${points.end.hariTanggal} ${points.end.waktuTagging} ${points.end.wilayahTagging}` : '',
-      detailGeotag,
-      tanggalInput: today(),
-      sumberData: 'Input parsing ePerjadin v4',
-      waktuRekamSumber: new Date().toISOString(),
-      schemaVersion: 4,
-      routes: parsed.routes,
-      components: parsed.components,
-      geotags: parsed.geotags,
-
-      // Field kompatibilitas. Backend V4 tidak memakai perhitungan SBM lokal.
-      tahap: 'Pertanggungjawaban',
-      nka: parsed.nomorSPD,
-      namaPegawai: parsed.peserta,
-      lamaHari: parsed.durasiHari,
-      uangHarianPerHari: parsed.durasiHari > 0 ? Math.round(uangHarian / parsed.durasiHari) : uangHarian,
-      totalUangHarian: uangHarian,
-      nilaiRiil: sourceTotal,
-    };
-
-    setSaving(true);
-    setMessage('');
-    try {
-      localStorage.setItem(WEBAPP_STORAGE_KEY, endpoint.trim());
-      const response = await fetch(endpoint.trim(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'upsertPerjadinV4', row, authIdToken: googleIdToken }),
-      });
-      const payload = await parseApiPayload(response);
-      if (!payload.success) throw new Error(payload.message || 'Gagal menyimpan data.');
-      setConnectionStatus('ok');
-      setConnectionMessage('Koneksi ePerjadin V4 aktif.');
-      setMessage(
-        `Tersimpan. ${parsed.nomorSPD} | ${parsed.peserta} | ${rupiah(sourceTotal)} | ${parsed.components.length} komponen`,
-      );
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      const data = readCollector(await file.text());
+      if (op === operation.current) setDraft(data);
+    } catch {
+      if (op === operation.current) setError(`File tidak sesuai format Collector atau melebihi ${MAX_BATCH} SPD.`);
     } finally {
-      setSaving(false);
+      if (op === operation.current) setBusy(false);
     }
   }
-
-  if (view === 'dashboard') {
-    return (
-      <main className="min-h-screen bg-slate-100 text-slate-950">
-        <header className="border-b border-slate-200 bg-white">
-          <div className="mx-auto max-w-7xl px-5 py-5">
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-700">ePerjadin Workspace</p><h1 className="mt-1 text-2xl font-semibold">Monitoring Perjalanan Dinas</h1><p className="mt-1 text-sm text-slate-500">Dashboard internal untuk memantau proses SPD dan kelengkapan pegawai.</p></div>
-              <div className="flex flex-wrap gap-2"><button type="button" onClick={() => { setShowBatch(true); setView('parser'); }} className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white">Impor Batch Pilot V2</button><button type="button" onClick={() => { setShowBatch(false); setView('parser'); }} className="rounded-lg border border-blue-700 px-4 py-2 text-sm font-semibold text-blue-700">Buka input parser</button></div>
-            </div>
-          </div>
-        </header>
-        <div className="mx-auto max-w-7xl space-y-3 p-5"><GoogleLoginV5 clientId={googleClientId} token={googleIdToken} onClientId={changeClientId} onToken={setGoogleIdToken} /><DashboardV4 endpoint={endpoint} authIdToken={googleIdToken} /></div>
-      </main>
-    );
+  async function request(send: boolean) {
+    if (busy || !token || !endpoint(url) || (send && !verified)) return;
+    const records = send ? draft.flatMap((x) => x.record && !x.issue ? [x.record] : []) : [];
+    if (send && (!draft.length || records.length !== draft.length)) return;
+    setBusy(true);
+    setError('');
+    setReceipt(undefined);
+    const op = ++operation.current;
+    try {
+      const action = !send ? 'verifyConnection' : mode === 'paste' ? 'submitParsedPerjadin' : 'submitCollectorJson';
+      const result = await post(action, endpoint(url), token, records);
+      if (op !== operation.current) return;
+      if (!send) setVerified(true);
+      else if (result) {
+        if (!result.rejected) resetInput();
+        else if (mode === 'json') {
+          if (chosenFile.current) chosenFile.current.value = '';
+          setDraft(result.results.filter((x) => x.status === 'rejected').map((x) => draft[x.row - 1]));
+        }
+        setReceipt(result);
+      }
+    } catch (e) {
+      if (op !== operation.current) return;
+      const code = e instanceof Error ? e.message : 'UNAVAILABLE';
+      if (code === 'UNAUTHORIZED' || code === 'FORBIDDEN') signOut();
+      setError(issues[code] || issues.UNAVAILABLE);
+    } finally {
+      if (op === operation.current) setBusy(false);
+    }
   }
-
-  return (
-    <main className="min-h-screen bg-slate-100 text-slate-950">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto max-w-7xl px-5 py-5">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-700">ePerjadin Workspace</p>
-          <div className="mt-1 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-            <div>
-              <h1 className="text-2xl font-semibold">Monitoring Pertanggungjawaban Perjalanan Dinas</h1>
-              <p className="mt-1 text-sm text-slate-500">Parser v4. Seluruh komponen biaya mengikuti nilai hasil copy ePerjadin.</p>
-            </div>
-            <div className="flex items-center gap-2"><button type="button" onClick={() => setView('dashboard')} className="rounded-lg border border-blue-700 px-3 py-2 text-xs font-semibold text-blue-700">Dashboard monitoring</button><div className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-800">Schema v4</div></div>
-          </div>
+  const invalid = draft.filter((row) => row.issue).length;
+  const single = mode === 'paste' ? draft[0]?.record : null;
+  return <div className="min-h-screen bg-slate-50 text-slate-950">
+    <header className="border-b border-slate-200 bg-white">
+      <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-2 px-4 py-4 sm:px-6">
+        <h1 className="flex items-center gap-2 text-lg font-semibold"><LockKeyhole size={19} className="text-teal-800" /> ePerjadin <span className="font-normal text-slate-500">/ Pengiriman SPD</span></h1>
+        <span className={verified ? 'text-sm font-medium text-teal-800' : 'text-sm text-slate-600'}>{verified ? 'Akses terverifikasi' : 'Belum masuk'}</span>
+      </div>
+    </header>
+    <main className="mx-auto grid max-w-5xl gap-7 px-4 py-6 sm:px-6 md:grid-cols-[minmax(0,1fr)_minmax(0,19rem)]">
+      <section className="min-w-0" aria-labelledby="input-title">
+        <h2 id="input-title" className="mb-3 text-base font-semibold">Input SPD</h2>
+        <div className="mb-4 flex flex-wrap gap-1 border-b border-slate-200" aria-label="Jenis input">
+          {(['paste', 'json'] as const).map((item) => {
+            const Icon = item === 'paste' ? ClipboardPaste : FileJson;
+            return <button key={item} type="button" disabled={busy} aria-pressed={item === mode} onClick={() => switchMode(item)}
+              className={`inline-flex min-h-10 items-center gap-2 border-b-2 px-3 text-sm font-medium ${item === mode ? 'border-teal-800 text-teal-900' : 'border-transparent text-slate-600 hover:text-slate-950'}`}>
+              <Icon size={16} />{item === 'paste' ? 'Copy-paste' : 'JSON Collector'}
+            </button>;
+          })}
         </div>
-      </header>
+        {mode === 'paste' ? <>
+          <label className="block text-sm font-medium" htmlFor="source-text">Teks pertanggungjawaban SPD</label>
+          <textarea id="source-text" className={`${inputStyle} min-h-48 resize-y`} autoComplete="off" spellCheck={false} maxLength={MAX_TEXT}
+            value={raw} disabled={busy} onChange={(e) => { setRaw(e.target.value); setDraft([]); setReceipt(undefined); setError(''); }} />
+          <button type="button" className={`${button} mt-3`} disabled={busy || !raw.trim()} onClick={() => { setDraft([review(raw)]); setReceipt(undefined); setError(''); }}>
+            <FileSearch size={16} /> Parsing
+          </button>
+        </> : <label className="block text-sm font-medium">File JSON Collector
+          <input type="file" className={inputStyle} accept=".json,application/json" ref={chosenFile} disabled={busy}
+            onChange={(e) => { void openFile(e.target.files?.[0]); }} />
+        </label>}
 
-      <section className="mx-auto max-w-7xl space-y-5 p-5">
-        {showBatch && <BatchImportV2 endpoint={endpoint} authIdToken={googleIdToken} onClose={() => setShowBatch(false)} />}
-        <div className="grid gap-4 lg:grid-cols-[1.25fr_.75fr]">
-          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-3 flex items-center gap-2">
-              <ClipboardPaste className="h-5 w-5 text-blue-700" />
-              <h2 className="font-semibold">Input Copy-Paste ePerjadin</h2>
+        {draft.length > 0 && <section className="mt-5 border-t border-slate-200 pt-4" aria-label="Pratinjau sementara">
+          <h3 className="text-sm font-semibold">Pratinjau sementara</h3>
+          {single && <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 break-words text-sm">
+            <dt className="text-slate-600">SPD</dt><dd>{single.nomorSPD || '-'}</dd>
+            <dt className="text-slate-600">Pelaksana</dt><dd>{single.peserta || '-'}</dd>
+            <dt className="text-slate-600">Total riil</dt><dd>{rupiah.format(single.totalPengeluaranRiil)}</dd>
+            <dt className="text-slate-600">Presensi</dt><dd>{single.presensiStatus === 'ada' ? `${single.geotags.length} titik, perlu verifikasi` :
+              single.presensiStatus === 'kosong' ? 'Tidak ada presensi' : 'Belum terbaca'}</dd>
+          </dl>}
+          {single && <details className="mt-3 text-sm">
+            <summary className="cursor-pointer font-medium text-teal-800">Rincian input SPD</summary>
+            <div className="mt-2 space-y-3 break-words border-l border-slate-200 pl-3">
+              <ul className="space-y-2">{single.routes.map((route, i) => <li key={i}>
+                <span className="font-medium">Rute {route.nomorRute}: {route.tujuan}</span>
+                <p className="text-slate-600">{route.tanggalMulai} s.d. {route.tanggalSelesai}</p>
+                <ul>{single.components.filter((c) => c.nomorRute === route.nomorRute).map((component, j) =>
+                  <li key={j}>{component.nama}: {rupiah.format(component.nilaiRiil)} ({component.status})</li>)}</ul>
+              </li>)}</ul>
+              {!!single.geotags.length && <ul className="space-y-2">{single.geotags.map((geo, i) =>
+                <li key={i}><p className="font-medium">{geo.hariTanggal} / {geo.waktuTagging}</p>
+                  <p>{geo.wilayahTagging}{geo.lokasiTagging && ` — ${geo.lokasiTagging}`}</p></li>)}</ul>}
             </div>
-            <textarea
-              value={raw}
-              onChange={(event) => setRaw(event.target.value)}
-              className="h-[420px] w-full rounded-lg border border-slate-300 p-4 font-mono text-xs leading-5 outline-none focus:border-blue-500"
-              placeholder="Paste seluruh teks Detail Pertanggungjawaban dan Presensi ePerjadin di sini..."
-            />
-          </section>
-
-          <aside className="space-y-4">
-            <GoogleLoginV5 clientId={googleClientId} token={googleIdToken} onClientId={changeClientId} onToken={setGoogleIdToken} />
-            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="mb-3 flex items-center gap-2">
-                <Database className="h-5 w-5 text-blue-700" />
-                <h2 className="font-semibold">Koneksi Database V4</h2>
-              </div>
-              <label className="text-xs font-medium text-slate-600">Apps Script Web App</label>
-              <div className="mt-1 flex gap-2">
-                <input value={endpoint} onChange={(e) => updateEndpoint(e.target.value)} className="min-w-0 flex-1 rounded-md border px-3 py-2 text-xs" />
-                <button type="button" onClick={() => void validateConnection()} disabled={connectionStatus === 'checking'} className="inline-flex items-center gap-2 rounded-md border border-blue-700 px-3 py-2 text-xs font-medium text-blue-700 disabled:opacity-50">
-                  <RefreshCw className={`h-3.5 w-3.5 ${connectionStatus === 'checking' ? 'animate-spin' : ''}`} />
-                  Uji Koneksi
-                </button>
-              </div>
-              {connectionMessage && (
-                <p className={`mt-2 rounded-md p-2 text-xs ${connectionStatus === 'ok' ? 'bg-emerald-50 text-emerald-700' : connectionStatus === 'error' ? 'bg-red-50 text-red-700' : 'bg-slate-50 text-slate-600'}`}>
-                  {connectionMessage}
-                </p>
-              )}
-            </section>
-
-            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="mb-3 flex items-center gap-2">
-                <WalletCards className="h-5 w-5 text-blue-700" />
-                <h2 className="font-semibold">Akun Anggaran</h2>
-              </div>
-              <select value={effectiveAccount} onChange={(e) => setKodeAkun(e.target.value)} className="w-full rounded-md border px-3 py-2 text-sm">
-                <option value="">Pilih akun, jangan gunakan akun otomatis</option>
-                {budgetAccounts.map((item) => <option key={item.kode} value={item.kode}>{item.nama}</option>)}
-              </select>
-              {!account && parsed && <p className="mt-2 text-xs text-amber-700">Kode akun tidak ada pada hasil copy. Pilih akun secara manual.</p>}
-              <label className="mt-3 block text-xs font-medium text-slate-600">Status Pertanggungjawaban</label>
-              <select value={statusPJ} onChange={(e) => setStatusPJ(e.target.value as StatusPertanggungjawaban)} className="mt-1 w-full rounded-md border px-3 py-2 text-sm">
-                {STATUS_PERTANGGUNGJAWABAN.map((status) => <option key={status}>{status}</option>)}
-              </select>
-            </section>
-          </aside>
+          </details>}
+          {mode === 'json' && <p className="mt-2 text-sm">{draft.length} SPD, {draft.length - invalid} lolos pemeriksaan awal, {invalid} perlu tinjau</p>}
+          {invalid > 0 && <ul className="mt-2 space-y-1 text-sm text-rose-800">{draft.flatMap((row, i) =>
+            row.issue ? [<li key={i}>Baris {i + 1}: {row.issue}</li>] : [])}</ul>}
+        </section>}
+        <div className="mt-5 flex flex-wrap gap-2">
+          <button type="button" className={primary} onClick={() => { void request(true); }}
+            disabled={!verified || busy || !draft.length || !!invalid}><Send size={16} />
+            {busy ? 'Memproses...' : mode === 'paste' ? 'Kirim ke Backend' : 'Kirim Batch ke Backend'}</button>
+          {(raw || draft.length > 0) && <button type="button" className={button} disabled={busy}
+            onClick={() => { resetInput(); setReceipt(undefined); setError(''); }}><Trash2 size={16} /> Bersihkan input</button>}
         </div>
+        {error && <p role="alert" className="mt-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-900">{error}</p>}
+        {receipt && <section role="status" className="mt-4 rounded-md border border-teal-200 bg-teal-50 px-3 py-3 text-sm">
+          <h3 className="flex items-center gap-2 font-semibold"><Check size={16} /> Konfirmasi backend</h3>
+          <p className="mt-1">{receipt.accepted} diterima, {receipt.skipped} duplikat dilewati, {receipt.rejected} ditolak</p>
+          <p className="mt-1 break-all text-xs text-slate-600">ID permintaan: {receipt.requestId}</p>
+          <ul className="mt-1 space-y-1">{receipt.results.filter((item) => item.status === 'rejected').map((item) =>
+            <li key={item.row}>Baris {item.row}: {issues[item.code]}</li>)}</ul>
+        </section>}
+      </section>
 
-        {parsed && (
-          <>
-            <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <InfoCard title="Kegiatan" icon={<CheckCircle2 className="h-4 w-4" />} lines={[parsed.namaKegiatan, parsed.nomorST, parsed.nomorKegiatan || 'Nomor kegiatan: -']} />
-              <InfoCard title="SPD" icon={<Database className="h-4 w-4" />} lines={[parsed.peserta, parsed.nip ? `NIP ${parsed.nip}` : '', parsed.nomorSPD]} />
-              <InfoCard title="Keuangan" icon={<WalletCards className="h-4 w-4" />} lines={[`Total ${rupiah(sourceTotal)}`, `${parsed.components.length} komponen`, `Uang Muka ${rupiah(parsed.uangMuka)}`]} />
-              <InfoCard title="Presensi" icon={<MapPin className="h-4 w-4" />} lines={[`${parsed.geotags.length} titik`, geotag?.status || 'Belum dinilai', detectedDestination]} />
-            </section>
-
-            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <h2 className="font-semibold">Komponen Biaya</h2>
-                <span className={`rounded-full px-3 py-1 text-xs font-medium ${Math.abs(componentDelta) < 1 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
-                  {Math.abs(componentDelta) < 1 ? 'Total komponen sesuai' : `Selisih ${rupiah(componentDelta)}`}
-                </span>
-              </div>
-              {parsed.components.length ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[650px] text-left text-sm">
-                    <thead className="border-b bg-slate-50 text-xs uppercase text-slate-500">
-                      <tr><th className="px-3 py-2">Komponen</th><th className="px-3 py-2">Status</th><th className="px-3 py-2 text-right">Nilai Riil</th></tr>
-                    </thead>
-                    <tbody>
-                      {parsed.components.map((item, index) => (
-                        <tr key={`${item.nama}-${index}`} className="border-b last:border-0">
-                          <td className="px-3 py-2">{item.nama}</td>
-                          <td className="px-3 py-2">{item.status || '-'}</td>
-                          <td className="px-3 py-2 text-right font-medium">{rupiah(item.nilaiRiil)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot className="border-t bg-slate-50 font-semibold">
-                      <tr><td className="px-3 py-2" colSpan={2}>Total komponen dikirim</td><td className="px-3 py-2 text-right">{rupiah(totalKomponenDikirim)}</td></tr>
-                      <tr><td className="px-3 py-2" colSpan={2}>Total Pengeluaran Riil</td><td className="px-3 py-2 text-right">{rupiah(sourceTotal)}</td></tr>
-                    </tfoot>
-                  </table>
-                </div>
-              ) : <p className="text-sm text-amber-700">Komponen biaya belum terbaca dari hasil copy.</p>}
-            </section>
-
-            {parsed.geotags.length > 0 && (
-              <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                <h2 className="mb-3 font-semibold">Presensi / Geotag</h2>
-                <div className="space-y-2">
-                  {parsed.geotags.map((item, index) => (
-                    <div key={`${item.hariTanggal}-${item.waktuTagging}-${index}`} className="grid gap-1 rounded-lg border border-slate-200 p-3 text-sm md:grid-cols-[130px_80px_160px_1fr]">
-                      <span className="font-medium">{item.hariTanggal}</span><span>{item.waktuTagging}</span><span>{item.wilayahTagging}</span><span className="text-slate-600">{item.lokasiTagging}</span>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-          </>
-        )}
-
-        <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div className="flex items-start gap-2">
-              {ready ? <CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-600" /> : <ShieldAlert className="mt-0.5 h-5 w-5 text-amber-600" />}
-              <div>
-                <p className="text-sm font-semibold">{ready ? 'Data siap disimpan' : 'Lengkapi data terlebih dahulu'}</p>
-                <p className="text-xs text-slate-500">Nomor SPD, total pengeluaran, dan akun wajib tersedia. Seluruh komponen biaya disimpan terpisah.</p>
-              </div>
-            </div>
-            <button onClick={() => void save()} disabled={!ready || saving} className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300">
-              <Save className="h-4 w-4" />{saving ? 'Menyimpan...' : 'Simpan ke Master E-Perjadin V4'}
-            </button>
-          </div>
-          {message && <p className="mt-3 rounded-md bg-blue-50 p-3 text-sm text-blue-800">{message}</p>}
-        </section>
+      <section className="min-w-0 border-t border-slate-200 pt-4 md:border-l md:border-t-0 md:pl-5 md:pt-0" aria-labelledby="access-title">
+        <h2 id="access-title" className="mb-3 text-base font-semibold">Akses petugas</h2>
+        <label className="block text-sm font-medium">URL Apps Script
+          <input className={inputStyle} type="url" value={url} autoComplete="off" spellCheck={false} disabled={busy}
+            onChange={(e) => { signOut(); setUrl(e.target.value); }} />
+        </label>
+        <label className="mt-3 block text-sm font-medium">Google OAuth Client ID
+          <input className={inputStyle} value={clientId} autoComplete="off" spellCheck={false} disabled={busy}
+            onChange={(e) => { signOut(); setClientId(e.target.value); }} />
+        </label>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {!login && <button type="button" className={button} disabled={busy || !endpoint(url) || !validClientId(clientId)} onClick={() => setLogin(true)}>
+            <LockKeyhole size={16} /> Masuk dengan Google
+          </button>}
+          {login && !token && <GoogleLoginV5 clientId={clientId.trim()} onToken={setGoogleToken} />}
+          {token && !verified && <button type="button" className={button} disabled={busy} onClick={() => { void request(false); }}>Verifikasi akses</button>}
+          {login && <button type="button" className={button} disabled={busy} onClick={() => { signOut(); resetInput(); setReceipt(undefined); setError(''); }}>
+            {token ? 'Keluar' : 'Batal'}
+          </button>}
+        </div>
       </section>
     </main>
-  );
-}
-
-function InfoCard({ title, icon, lines }: { title: string; icon: React.ReactNode; lines: string[] }) {
-  return (
-    <article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-center gap-2 text-blue-700">{icon}<h3 className="text-sm font-semibold">{title}</h3></div>
-      <div className="mt-3 space-y-1 text-sm text-slate-700">{lines.filter(Boolean).map((line, index) => <p key={`${line}-${index}`} className="break-words">{line}</p>)}</div>
-    </article>
-  );
+  </div>;
 }

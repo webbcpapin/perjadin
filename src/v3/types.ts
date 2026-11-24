@@ -50,6 +50,9 @@ export interface ParsedPerjadinV3 {
   statusUangHarian: string;
   uangMuka: number;
   totalPengeluaranRiil: number;
+  totalResmiTerbaca: boolean;
+  uangMukaTerbaca: boolean;
+  presensiStatus: 'ada' | 'kosong' | 'belum_terbaca';
   nilaiSBMAwal: number;
   totalNilaiSBM: number;
   totalNilaiRiil: number;
